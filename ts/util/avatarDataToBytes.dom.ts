@@ -4,6 +4,7 @@
 import type { AvatarColorType, AvatarDataType } from '../types/Avatar.std.ts';
 import { AvatarColorMap } from '../types/Avatar.std.ts';
 import { canvasToBytes } from './canvasToBytes.dom.ts';
+import { toLoadableUrl } from './toLoadableUrl.std.ts';
 import { getFittedFontSize } from './avatarTextSizeCalculator.std.ts';
 import {
   getLocalAttachmentUrl,
@@ -44,7 +45,7 @@ async function drawImage(
 async function getFont(text: string): Promise<string> {
   const font = new window.FontFace(
     'Inter',
-    'url("asset:///fonts/inter-v3.19/Inter-Regular.woff2")'
+    `url("${toLoadableUrl('asset:///fonts/inter-v3.19/Inter-Regular.woff2')}")`
   );
   await font.load();
 

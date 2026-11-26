@@ -12,6 +12,8 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import os from 'node:os';
+import { deserialize, serialize } from 'node:v8';
 import { Script, constants } from 'node:vm';
 // The full module is needed to build the renderer's `electron` shim.
 // oxlint-disable-next-line signal-desktop/enforce-file-suffix
@@ -27,6 +29,17 @@ import { installRendererGlobals } from './rendererGlobals.node.ts';
 import type { SignalHeadlessHooks } from '../../ts/headless/types.std.ts';
 import { ReduxBridge } from './ReduxBridge.std.ts';
 import { LocalServer } from './LocalServer.main.ts';
+import {
+  getAttachmentsPath,
+  getAvatarsPath,
+  getBadgesPath,
+  getDownloadsPath,
+  getDraftPath,
+  getMegaphonesPath,
+  getStickersPath,
+  getTempPath,
+} from '../attachments.node.ts';
+import type { BrowserBackend } from './LocalServer.main.ts';
 
 const log = createLogger('HeadlessHost');
 
@@ -105,6 +118,34 @@ const PREFETCHED_SYNC_CHANNELS = [
 
 const NO_RETURN_VALUE = Symbol('NO_RETURN_VALUE');
 
+// The browser build's node:v8 shim (ts/headless/browser/v8Shim.dom.ts) tags
+// values instead of serializing them; the real v8 format is produced here.
+const V8_TAG = '$v8';
+const V8_CHANNELS = new Set(['sql-channel:read', 'sql-channel:write']);
+
+function isV8Tagged(value: unknown): value is { [V8_TAG]: unknown } {
+  return value != null && typeof value === 'object' && V8_TAG in value;
+}
+
+type RendererConversationModel = {
+  id: string;
+  attributes: Readonly<Record<string, unknown>>;
+};
+
+type RendererGlobals = {
+  reduxActions?: Record<string, Record<string, unknown>>;
+  reduxStore?: { dispatch: (action: unknown) => unknown };
+  ConversationController?: {
+    get: (id: string) => RendererConversationModel | undefined;
+    getAll: () => Array<RendererConversationModel>;
+    isSignalConversationId: (id: string) => boolean;
+  };
+};
+
+function getRendererGlobals(): RendererGlobals {
+  return globalThis as unknown as RendererGlobals;
+}
+
 export class HeadlessHost {
   readonly window: HeadlessBrowserWindow;
   readonly asBrowserWindow: Electron.BrowserWindow;
@@ -112,7 +153,29 @@ export class HeadlessHost {
   readonly #ipcRenderer: HeadlessIpcRenderer;
   readonly #rendererEvent: { sender: HeadlessIpcRenderer; senderId: number };
   readonly #syncCache = new Map<string, unknown>();
-  readonly #bridge = new ReduxBridge();
+  readonly #bridge = new ReduxBridge({
+    getAttributes: ids => {
+      const controller = getRendererGlobals().ConversationController;
+      if (!controller) {
+        return {};
+      }
+      const models = ids
+        ? ids.map(id => controller.get(id))
+        : controller.getAll();
+      return Object.fromEntries(
+        models
+          .filter(model => model != null)
+          .map(model => [model.id, model.attributes])
+      );
+    },
+    getSignalConversationId: () => {
+      const controller = getRendererGlobals().ConversationController;
+      return controller
+        ?.getAll()
+        .find(model => controller.isSignalConversationId(model.id))?.id;
+    },
+  });
+  #backendModules: Record<string, object> | undefined;
   #server: LocalServer | undefined;
 
   constructor() {
@@ -202,6 +265,111 @@ export class HeadlessHost {
     return result;
   }
 
+  #createBrowserBackend(): BrowserBackend {
+    const renderer = getRendererGlobals();
+    return {
+      getBootData: () => {
+        const userDataPath = electron.app.getPath('userData');
+        return {
+          sync: Object.fromEntries(this.#syncCache),
+          platform: process.platform,
+          os: {
+            platform: os.platform(),
+            release: os.release(),
+            arch: os.arch(),
+            homedir: os.homedir(),
+            tmpdir: os.tmpdir(),
+            hostname: os.hostname(),
+            type: os.type(),
+            version: os.version(),
+          },
+          basePaths: {
+            ATTACHMENTS_PATH: getAttachmentsPath(userDataPath),
+            DRAFT_PATH: getDraftPath(userDataPath),
+            STICKERS_PATH: getStickersPath(userDataPath),
+            TEMP_PATH: getTempPath(userDataPath),
+            BADGES_PATH: getBadgesPath(userDataPath),
+            AVATARS_PATH: getAvatarsPath(userDataPath),
+            DOWNLOADS_PATH: getDownloadsPath(userDataPath),
+            MEGAPHONES_PATH: getMegaphonesPath(userDataPath),
+          },
+        };
+      },
+
+      invoke: async (channel, args) => {
+        const mainArgs = args.map(arg =>
+          isV8Tagged(arg) ? serialize(arg[V8_TAG]) : arg
+        );
+        const result = await this.invokeOnMain(channel, mainArgs);
+        if (
+          V8_CHANNELS.has(channel) &&
+          result != null &&
+          typeof result === 'object' &&
+          'ok' in result &&
+          result.ok &&
+          'value' in result &&
+          result.value instanceof Uint8Array
+        ) {
+          return { ...result, value: { [V8_TAG]: deserialize(result.value) } };
+        }
+        return result;
+      },
+
+      send: (channel, args) => {
+        this.emitOnMain(channel, args);
+      },
+
+      callAction: async (duck, name, args) => {
+        const actions = renderer.reduxActions;
+        const duckActions =
+          actions && Object.hasOwn(actions, duck) ? actions[duck] : undefined;
+        const fn =
+          duckActions && Object.hasOwn(duckActions, name)
+            ? duckActions[name]
+            : undefined;
+        if (typeof fn !== 'function') {
+          throw new Error(`Unknown action ${duck}.${name}`);
+        }
+        return fn(...args);
+      },
+
+      callModule: async (moduleName, name, args) => {
+        const modules = this.#backendModules;
+        const module =
+          modules && Object.hasOwn(modules, moduleName)
+            ? (modules[moduleName] as Record<string, unknown>)
+            : undefined;
+        // Own exports, or methods of a registered object's own class
+        // (itemStorage) - never Object.prototype's.
+        const proto = module ? Object.getPrototypeOf(module) : undefined;
+        const isExposed =
+          module != null &&
+          (Object.hasOwn(module, name) ||
+            (proto != null &&
+              proto !== Object.prototype &&
+              Object.hasOwn(proto, name)));
+        const fn = isExposed ? module[name] : undefined;
+        if (typeof fn !== 'function' || name === 'constructor') {
+          throw new Error(`Unknown backend function ${moduleName}.${name}`);
+        }
+        return fn.apply(module, args);
+      },
+
+      dispatch: action => {
+        if (
+          action == null ||
+          typeof action !== 'object' ||
+          !('type' in action) ||
+          typeof action.type !== 'string'
+        ) {
+          throw new Error('dispatch: not a plain redux action');
+        }
+        strictAssert(renderer.reduxStore, 'dispatch: no redux store yet');
+        renderer.reduxStore.dispatch(action);
+      },
+    };
+  }
+
   async #prefetchSyncChannels(): Promise<void> {
     await Promise.all(
       PREFETCHED_SYNC_CHANNELS.map(
@@ -276,6 +444,7 @@ export class HeadlessHost {
       rootDir,
       userDataPath: electron.app.getPath('userData'),
       bridge: this.#bridge,
+      backend: this.#createBrowserBackend(),
     });
     await this.#server.start();
 
@@ -295,8 +464,9 @@ export class HeadlessHost {
     window.preloadCompileStartTime = Date.now();
     const hooks: SignalHeadlessHooks = {
       reduxMiddleware: this.#bridge.middleware,
-      onAppReady: store => {
+      onAppReady: (store, modules) => {
         log.info('app ready; streaming redux store to browser tabs');
+        this.#backendModules = modules;
         this.#bridge.setStore(store);
       },
     };

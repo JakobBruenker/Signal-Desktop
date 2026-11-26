@@ -3,6 +3,7 @@
 
 import lodash from 'lodash';
 import { strictAssert } from './assert.std.ts';
+import { toLoadableUrl } from './toLoadableUrl.std.ts';
 
 import type { AttachmentType } from '../types/Attachment.std.ts';
 
@@ -120,5 +121,5 @@ export function getLocalAttachmentUrl(
     url.searchParams.set('weakReference', '1');
   }
 
-  return url.toString();
+  return toLoadableUrl(url.toString());
 }

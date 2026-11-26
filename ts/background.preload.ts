@@ -164,6 +164,7 @@ import { UpdateKeysListener } from './textsecure/UpdateKeysListener.preload.ts';
 import { isGroup, isMe } from './util/whatTypeOfConversation.dom.ts';
 import { BackOff, FIBONACCI_TIMEOUTS } from './util/BackOff.std.ts';
 import { createApp as createAppRoot } from './state/roots/createApp.preload.tsx';
+import { headlessBackendModules } from './headless/backendModules.preload.ts';
 import { AppViewType } from './types/app.std.ts';
 import { areAnyCallsActiveOrRinging } from './state/selectors/calling.std.ts';
 import { badgeImageFileDownloader } from './badges/badgeImageFileDownloader.preload.ts';
@@ -1627,7 +1628,10 @@ async function startApp(): Promise<void> {
 
     if (window.SignalHeadless) {
       // Headless: browser tabs render the UI from this store.
-      window.SignalHeadless.onAppReady(window.reduxStore);
+      window.SignalHeadless.onAppReady(
+        window.reduxStore,
+        headlessBackendModules
+      );
     } else {
       const appContainer = document.getElementById('app-container');
       strictAssert(appContainer != null, 'No #app-container');

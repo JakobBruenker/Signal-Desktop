@@ -4,6 +4,10 @@
 // Streams the backend's redux store to browser tabs: a snapshot on connect,
 // then every action that reaches the reducers, in order. Tabs run the same
 // reducers, so replaying actions keeps their copy of the state in sync.
+//
+// UI code also reads conversation models (window.ConversationController)
+// directly, so their attributes travel along: all of them with the
+// snapshot, and those of conversations an action changed with that action.
 
 import type { Middleware, Store } from 'redux';
 
@@ -18,26 +22,86 @@ export type BridgeClient = Readonly<{
   send: (event: 'snapshot' | 'action', data: string) => boolean;
 }>;
 
+export type ConversationModelSource = Readonly<{
+  // Attributes of the given conversations, or of all of them
+  getAttributes: (
+    ids?: ReadonlyArray<string>
+  ) => Record<string, Readonly<Record<string, unknown>>>;
+  getSignalConversationId: () => string | undefined;
+}>;
+
+type ConversationLookup = Readonly<Record<string, unknown>>;
+
+function getConversationLookup(state: unknown): ConversationLookup {
+  return (
+    (state as { conversations?: { conversationLookup?: ConversationLookup } })
+      .conversations?.conversationLookup ?? {}
+  );
+}
+
 export class ReduxBridge {
   #store: Store | undefined;
   #seq = 0;
   readonly #clients = new Set<BridgeClient>();
   readonly #pending = new Set<BridgeClient>();
   readonly #reported = new Set<string>();
+  readonly #conversations: ConversationModelSource;
 
-  readonly middleware: Middleware = () => next => action => {
-    const result = next(action);
-    this.#seq += 1;
-    if (this.#clients.size > 0) {
-      const data = encodeWire({ seq: this.#seq, action }, this.#report);
+  constructor(conversations: ConversationModelSource) {
+    this.#conversations = conversations;
+  }
+
+  readonly middleware: Middleware =
+    ({ getState }) =>
+    next =>
+    action => {
+      const before = getConversationLookup(getState());
+      const result = next(action);
+      this.#seq += 1;
+      if (this.#clients.size === 0) {
+        return result;
+      }
+
+      // Conversations whose redux entry this action replaced or removed
+      const after = getConversationLookup(getState());
+      const changedIds: Array<string> = [];
+      const removedIds: Array<string> = [];
+      if (after !== before) {
+        for (const [id, entry] of Object.entries(after)) {
+          if (before[id] !== entry) {
+            changedIds.push(id);
+          }
+        }
+        for (const id of Object.keys(before)) {
+          if (!(id in after)) {
+            removedIds.push(id);
+          }
+        }
+      }
+
+      const data = encodeWire(
+        {
+          seq: this.#seq,
+          action,
+          ...(changedIds.length > 0
+            ? {
+                conversationAttributes:
+                  this.#conversations.getAttributes(changedIds),
+              }
+            : {}),
+          ...(removedIds.length > 0
+            ? { removedConversationIds: removedIds }
+            : {}),
+        },
+        this.#report
+      );
       for (const client of this.#clients) {
         if (!client.send('action', data)) {
           this.#clients.delete(client);
         }
       }
-    }
-    return result;
-  };
+      return result;
+    };
 
   setStore(store: Store): void {
     this.#store = store;
@@ -70,7 +134,12 @@ export class ReduxBridge {
       throw new Error('ReduxBridge: no store');
     }
     const data = encodeWire(
-      { seq: this.#seq, state: this.#store.getState() },
+      {
+        seq: this.#seq,
+        state: this.#store.getState(),
+        conversationAttributes: this.#conversations.getAttributes(),
+        signalConversationId: this.#conversations.getSignalConversationId(),
+      },
       this.#report
     );
     if (client.send('snapshot', data)) {

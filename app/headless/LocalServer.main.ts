@@ -8,7 +8,7 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
@@ -21,6 +21,8 @@ import * as Errors from '../../ts/types/errors.std.ts';
 import { drop } from '../../ts/util/drop.std.ts';
 import type { ReduxBridge } from './ReduxBridge.std.ts';
 import { DEBUG_PAGE_HTML, DEBUG_PAGE_JS } from './debugPage.std.ts';
+import { APP_PAGE_CSP, renderAppPage } from './appPage.std.ts';
+import { decodeWire, encodeWire } from '../../ts/headless/wire.std.ts';
 
 const log = createLogger('LocalServer');
 
@@ -29,6 +31,7 @@ const COOKIE_NAME = 'signal_headless';
 const SSE_HEARTBEAT_MS = 15_000;
 // A tab that falls this far behind is dropped; it reconnects with a snapshot.
 const SSE_MAX_BUFFERED_BYTES = 64 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
 
 // Custom protocols the UI loads resources from. Served through the existing
 // protocol.handle() handlers via net.fetch.
@@ -54,11 +57,43 @@ const CONTENT_TYPES: Record<string, string> = {
   '.wav': 'audio/wav',
 };
 
+// What the backend offers browser tabs (implemented by HeadlessHost)
+export type BrowserBackend = Readonly<{
+  getBootData: () => unknown;
+  invoke: (channel: string, args: ReadonlyArray<unknown>) => Promise<unknown>;
+  send: (channel: string, args: ReadonlyArray<unknown>) => void;
+  callAction: (
+    duck: string,
+    name: string,
+    args: ReadonlyArray<unknown>
+  ) => Promise<unknown>;
+  dispatch: (action: unknown) => void;
+  callModule: (
+    module: string,
+    name: string,
+    args: ReadonlyArray<unknown>
+  ) => Promise<unknown>;
+}>;
+
 type Options = Readonly<{
   rootDir: string;
   userDataPath: string;
   bridge: ReduxBridge;
+  backend: BrowserBackend;
 }>;
+
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Array<Buffer<ArrayBuffer>> = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer<ArrayBuffer>).length;
+    if (size > MAX_REQUEST_BODY_BYTES) {
+      throw new Error('request body too large');
+    }
+    chunks.push(chunk as Buffer<ArrayBuffer>);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 function loadOrCreateToken(userDataPath: string): string {
   const tokenPath = join(userDataPath, 'headless-token');
@@ -204,8 +239,7 @@ export class LocalServer {
         res.writeHead(403).end();
         return;
       }
-      // RPC endpoints land here (browser -> backend actions)
-      res.writeHead(404).end();
+      await this.#handlePost(req, res, url.pathname);
       return;
     }
 
@@ -215,6 +249,15 @@ export class LocalServer {
     }
 
     if (url.pathname === '/') {
+      this.#sendText(
+        res,
+        'text/html; charset=utf-8',
+        renderAppPage(encodeWire(this.#options.backend.getBootData())),
+        { 'Content-Security-Policy': APP_PAGE_CSP }
+      );
+      return;
+    }
+    if (url.pathname === '/debug') {
       this.#sendText(res, 'text/html; charset=utf-8', DEBUG_PAGE_HTML, {
         'Content-Security-Policy':
           "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'",
@@ -237,6 +280,19 @@ export class LocalServer {
       await this.#handleStatic(req, res, url.pathname.slice('/static/'.length));
       return;
     }
+    if (url.pathname.startsWith('/browser/')) {
+      await this.#handleStatic(req, res, url.pathname.slice(1), 'bundles');
+      return;
+    }
+    if (url.pathname.startsWith('/asset/')) {
+      // asset:///<path> URLs, as rewritten in CSS (see #handleStatic)
+      await this.#handleProtocol(
+        req,
+        res,
+        `asset:///${url.pathname.slice('/asset/'.length)}`
+      );
+      return;
+    }
 
     res.writeHead(404).end();
   }
@@ -253,6 +309,57 @@ export class LocalServer {
       ...headers,
     });
     res.end(body);
+  }
+
+  async #handlePost(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string
+  ): Promise<void> {
+    const { backend } = this.#options;
+    let request: Record<string, unknown>;
+    try {
+      request = decodeWire(await readBody(req)) as Record<string, unknown>;
+    } catch {
+      res.writeHead(400).end();
+      return;
+    }
+
+    const reply = (result: unknown): void => {
+      this.#sendText(res, 'application/json', encodeWire(result));
+    };
+    const run = async (fn: () => unknown) => {
+      try {
+        reply({ ok: true, value: await fn() });
+      } catch (error) {
+        reply({ ok: false, error: Errors.toLogFormat(error) });
+      }
+    };
+    const args = Array.isArray(request.args) ? request.args : [];
+
+    switch (pathname) {
+      case '/api/ipc/invoke':
+        await run(() => backend.invoke(String(request.channel), args));
+        return;
+      case '/api/ipc/send':
+        await run(() => backend.send(String(request.channel), args));
+        return;
+      case '/api/action':
+        await run(() =>
+          backend.callAction(String(request.duck), String(request.name), args)
+        );
+        return;
+      case '/api/dispatch':
+        await run(() => backend.dispatch(request.action));
+        return;
+      case '/api/module':
+        await run(() =>
+          backend.callModule(String(request.module), String(request.name), args)
+        );
+        return;
+      default:
+        res.writeHead(404).end();
+    }
   }
 
   #handleEvents(req: IncomingMessage, res: ServerResponse): void {
@@ -343,11 +450,14 @@ export class LocalServer {
   async #handleStatic(
     req: IncomingMessage,
     res: ServerResponse,
-    relativePath: string
+    relativePath: string,
+    // Subdirectory of the app root that relativePath is relative to
+    container = ''
   ): Promise<void> {
-    const { rootDir } = this.#options;
+    const rootDir = join(this.#options.rootDir, container);
     const topDir = decodeURIComponent(relativePath).split('/')[0];
-    if (topDir == null || !STATIC_DIRS.includes(topDir)) {
+    const allowed = container === 'bundles' ? ['browser'] : STATIC_DIRS;
+    if (topDir == null || !allowed.includes(topDir)) {
       res.writeHead(404).end();
       return;
     }
@@ -369,10 +479,22 @@ export class LocalServer {
       res.writeHead(404).end();
       return;
     }
+    const contentType =
+      CONTENT_TYPES[extname(filePath).toLowerCase()] ??
+      'application/octet-stream';
+
+    if (extname(filePath) === '.css') {
+      // Stylesheets reference fonts etc. via asset:///
+      const css = (await readFile(filePath, 'utf8')).replaceAll(
+        'asset:///',
+        '/asset/'
+      );
+      this.#sendText(res, contentType, css, { 'Cache-Control': 'no-cache' });
+      return;
+    }
+
     res.writeHead(200, {
-      'Content-Type':
-        CONTENT_TYPES[extname(filePath).toLowerCase()] ??
-        'application/octet-stream',
+      'Content-Type': contentType,
       'Content-Length': size,
       'Cache-Control': 'no-cache',
     });

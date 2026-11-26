@@ -104,12 +104,22 @@ function isTagged(value: object): value is Tagged {
   return TAG in value;
 }
 
-function decodeValue(value: unknown): unknown {
+// Lets the receiver adjust string values by property name (e.g. URLs)
+export type StringReviver = (key: string, value: string) => string;
+
+function decodeValue(
+  value: unknown,
+  revive?: StringReviver,
+  key = ''
+): unknown {
+  if (typeof value === 'string') {
+    return revive ? revive(key, value) : value;
+  }
   if (value == null || typeof value !== 'object') {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(decodeValue);
+    return value.map(item => decodeValue(item, revive, key));
   }
   if (isTagged(value)) {
     switch (value[TAG]) {
@@ -117,10 +127,13 @@ function decodeValue(value: unknown): unknown {
         return fromBase64(value.v);
       case 'map':
         return new Map(
-          value.v.map(([k, v]) => [decodeValue(k), decodeValue(v)])
+          value.v.map(([k, v]) => [
+            decodeValue(k, revive),
+            decodeValue(v, revive),
+          ])
         );
       case 'set':
-        return new Set(value.v.map(decodeValue));
+        return new Set(value.v.map(item => decodeValue(item, revive)));
       case 'date':
         return new Date(value.v);
       case 'bigint':
@@ -132,8 +145,8 @@ function decodeValue(value: unknown): unknown {
     }
   }
   const result: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value)) {
-    result[key] = decodeValue(v);
+  for (const [childKey, v] of Object.entries(value)) {
+    result[childKey] = decodeValue(v, revive, childKey);
   }
   return result;
 }
@@ -145,6 +158,6 @@ export function encodeWire(
   return JSON.stringify(encodeValue(value, '$', report));
 }
 
-export function decodeWire(text: string): unknown {
-  return decodeValue(JSON.parse(text));
+export function decodeWire(text: string, revive?: StringReviver): unknown {
+  return decodeValue(JSON.parse(text), revive);
 }

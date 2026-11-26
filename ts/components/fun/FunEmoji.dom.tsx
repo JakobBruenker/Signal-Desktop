@@ -7,6 +7,7 @@ import MANIFEST from '../../../build/jumbomoji.json';
 import type { FunImageAriaProps } from './types.dom.tsx';
 import { createLogger } from '../../logging/log.std.ts';
 import { Emoji } from '../../axo/emoji.std.ts';
+import { toLoadableUrl } from '../../util/toLoadableUrl.std.ts';
 
 const log = createLogger('FunEmoji');
 
@@ -25,7 +26,7 @@ function getEmojiJumboUrl(
     return null;
   }
   if (KNOWN_JUMBOMOJI.has(emoji)) {
-    return `emoji://jumbo?emoji=${encodeURIComponent(emoji)}`;
+    return toLoadableUrl(`emoji://jumbo?emoji=${encodeURIComponent(emoji)}`);
   }
   return null;
 }

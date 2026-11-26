@@ -4,6 +4,7 @@
 import type { Middleware, Store } from 'redux';
 
 import type { StateType } from '../state/reducer.preload.ts';
+import type { HeadlessBackendModules } from './backendModules.preload.ts';
 
 // Present as `window.SignalHeadless` when the main window's renderer code runs
 // headless inside the main process (see app/headless/HeadlessHost.main.ts).
@@ -12,5 +13,8 @@ export type SignalHeadlessHooks = Readonly<{
   // Installed last in the redux middleware chain, so it only sees the plain
   // actions that reach the reducers (after thunks and promises resolve).
   reduxMiddleware: Middleware;
-  onAppReady: (store: Store<StateType>) => void;
+  onAppReady: (
+    store: Store<StateType>,
+    modules: HeadlessBackendModules
+  ) => void;
 }>;
