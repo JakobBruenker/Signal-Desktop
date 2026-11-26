@@ -3,7 +3,8 @@
 
 // JSON encoding for redux state/actions sent between the headless backend and
 // browser tabs. Plain JSON loses binary data and collections that appear in
-// state (Uint8Array keys, Maps, Sets), so those are tagged.
+// state (Uint8Array keys, Maps, Sets), so those are tagged. Blobs and Files
+// (attachments being sent) are uploaded separately and travel by id.
 
 const TAG = '$signalWire';
 
@@ -13,7 +14,17 @@ type Tagged =
   | { [TAG]: 'set'; v: Array<unknown> }
   | { [TAG]: 'date'; v: number }
   | { [TAG]: 'bigint'; v: string }
-  | { [TAG]: 'undefined' };
+  | { [TAG]: 'undefined' }
+  | ({ [TAG]: 'blob' } & WireBlob);
+
+// A Blob/File uploaded to the backend ahead of the message that refers to it
+export type WireBlob = Readonly<{
+  id: string;
+  type: string;
+  // Only for Files
+  name?: string;
+  lastModified?: number;
+}>;
 
 function toBase64(bytes: Uint8Array<ArrayBuffer>): string {
   let binary = '';
@@ -34,11 +45,18 @@ function fromBase64(value: string): Uint8Array<ArrayBuffer> {
 
 export type UnsupportedValueReporter = (path: string, kind: string) => void;
 
+type EncodeContext = Readonly<{
+  report?: UnsupportedValueReporter;
+  // Upload ids of the Blobs in the value
+  blobIds?: ReadonlyMap<Blob, string>;
+}>;
+
 function encodeValue(
   value: unknown,
   path: string,
-  report: UnsupportedValueReporter | undefined
+  context: EncodeContext
 ): unknown {
+  const { report } = context;
   if (value === undefined) {
     return { [TAG]: 'undefined' };
   }
@@ -62,23 +80,38 @@ function encodeValue(
   if (value instanceof Date) {
     return { [TAG]: 'date', v: value.getTime() };
   }
+  if (typeof Blob !== 'undefined' && value instanceof Blob) {
+    const id = context.blobIds?.get(value);
+    if (id == null) {
+      report?.(path, 'Blob');
+      return null;
+    }
+    return {
+      [TAG]: 'blob',
+      id,
+      type: value.type,
+      ...(value instanceof File
+        ? { name: value.name, lastModified: value.lastModified }
+        : {}),
+    };
+  }
   if (value instanceof Map) {
     return {
       [TAG]: 'map',
       v: Array.from(value, ([k, v], i) => [
-        encodeValue(k, `${path}.<key${i}>`, report),
-        encodeValue(v, `${path}.<value${i}>`, report),
+        encodeValue(k, `${path}.<key${i}>`, context),
+        encodeValue(v, `${path}.<value${i}>`, context),
       ]),
     };
   }
   if (value instanceof Set) {
     return {
       [TAG]: 'set',
-      v: Array.from(value, (v, i) => encodeValue(v, `${path}[${i}]`, report)),
+      v: Array.from(value, (v, i) => encodeValue(v, `${path}[${i}]`, context)),
     };
   }
   if (Array.isArray(value)) {
-    return value.map((v, i) => encodeValue(v, `${path}[${i}]`, report));
+    return value.map((v, i) => encodeValue(v, `${path}[${i}]`, context));
   }
 
   const proto = Object.getPrototypeOf(value);
@@ -94,7 +127,7 @@ function encodeValue(
     // `{ key: undefined }` and `{}` are equivalent for redux state; skipping
     // these keeps snapshots much smaller.
     if (v !== undefined) {
-      result[key] = encodeValue(v, `${path}.${key}`, report);
+      result[key] = encodeValue(v, `${path}.${key}`, context);
     }
   }
   return result;
@@ -107,11 +140,17 @@ function isTagged(value: object): value is Tagged {
 // Lets the receiver adjust string values by property name (e.g. URLs)
 export type StringReviver = (key: string, value: string) => string;
 
+type DecodeContext = Readonly<{
+  revive?: StringReviver;
+  resolveBlob?: (blob: WireBlob) => Blob;
+}>;
+
 function decodeValue(
   value: unknown,
-  revive?: StringReviver,
+  context: DecodeContext,
   key = ''
 ): unknown {
+  const { revive } = context;
   if (typeof value === 'string') {
     return revive ? revive(key, value) : value;
   }
@@ -119,7 +158,7 @@ function decodeValue(
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(item => decodeValue(item, revive, key));
+    return value.map(item => decodeValue(item, context, key));
   }
   if (isTagged(value)) {
     switch (value[TAG]) {
@@ -128,36 +167,70 @@ function decodeValue(
       case 'map':
         return new Map(
           value.v.map(([k, v]) => [
-            decodeValue(k, revive),
-            decodeValue(v, revive),
+            decodeValue(k, context),
+            decodeValue(v, context),
           ])
         );
       case 'set':
-        return new Set(value.v.map(item => decodeValue(item, revive)));
+        return new Set(value.v.map(item => decodeValue(item, context)));
       case 'date':
         return new Date(value.v);
       case 'bigint':
         return BigInt(value.v);
       case 'undefined':
         return undefined;
+      case 'blob':
+        if (!context.resolveBlob) {
+          throw new Error('wire: unexpected blob');
+        }
+        return context.resolveBlob(value);
       default:
         throw new Error('wire: unknown tag');
     }
   }
   const result: Record<string, unknown> = {};
   for (const [childKey, v] of Object.entries(value)) {
-    result[childKey] = decodeValue(v, revive, childKey);
+    result[childKey] = decodeValue(v, context, childKey);
   }
   return result;
 }
 
 export function encodeWire(
   value: unknown,
-  report?: UnsupportedValueReporter
+  report?: UnsupportedValueReporter,
+  blobIds?: ReadonlyMap<Blob, string>
 ): string {
-  return JSON.stringify(encodeValue(value, '$', report));
+  return JSON.stringify(encodeValue(value, '$', { report, blobIds }));
 }
 
-export function decodeWire(text: string, revive?: StringReviver): unknown {
-  return decodeValue(JSON.parse(text), revive);
+export function decodeWire(
+  text: string,
+  revive?: StringReviver,
+  resolveBlob?: (blob: WireBlob) => Blob
+): unknown {
+  return decodeValue(JSON.parse(text), { revive, resolveBlob });
+}
+
+// Blobs anywhere in a value (arrays, plain objects, Maps, Sets)
+export function findBlobs(value: unknown, found = new Set<Blob>()): Set<Blob> {
+  if (value == null || typeof value !== 'object') {
+    return found;
+  }
+  if (typeof Blob !== 'undefined' && value instanceof Blob) {
+    found.add(value);
+  } else if (value instanceof Map) {
+    for (const [k, v] of value) {
+      findBlobs(k, found);
+      findBlobs(v, found);
+    }
+  } else if (Array.isArray(value) || value instanceof Set) {
+    for (const item of value) {
+      findBlobs(item, found);
+    }
+  } else if (!ArrayBuffer.isView(value) && !(value instanceof ArrayBuffer)) {
+    for (const v of Object.values(value)) {
+      findBlobs(v, found);
+    }
+  }
+  return found;
 }

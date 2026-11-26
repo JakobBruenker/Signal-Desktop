@@ -68,6 +68,14 @@ const BACKEND_FILE_REPLACEMENTS: Record<string, string> = {
     'ts/headless/backend/visualAttachment.preload.ts'
   ),
   'Sound.std.ts': join(__dirname, 'ts/headless/backend/sound.dom.ts'),
+  'scaleImageToLevel.preload.ts': join(
+    __dirname,
+    'ts/headless/backend/scaleImageToLevel.preload.ts'
+  ),
+  'imageToBlurHash.dom.ts': join(
+    __dirname,
+    'ts/headless/backend/imageToBlurHash.preload.ts'
+  ),
 };
 
 // Browser UI build: Node built-ins and native/Node-only modules become stubs

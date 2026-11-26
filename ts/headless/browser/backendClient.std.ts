@@ -7,19 +7,43 @@
 
 import type { ActionCreatorsMapObject } from 'redux';
 
-import { decodeWire, encodeWire } from '../wire.std.ts';
+import { decodeWire, encodeWire, findBlobs } from '../wire.std.ts';
+
+// Files (attachments, avatars, ...) go up first; the call refers to them by id
+async function uploadBlob(blob: Blob): Promise<string> {
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: blob,
+  });
+  if (!response.ok) {
+    throw new Error(`upload failed: HTTP ${response.status}`);
+  }
+  const { id } = (await response.json()) as { id: string };
+  return id;
+}
 
 export async function callBackend(
   path: string,
   body: Record<string, unknown>
 ): Promise<unknown> {
+  const blobs = Array.from(findBlobs(body));
+  const blobIds = new Map<Blob, string>(
+    await Promise.all(
+      blobs.map(async blob => [blob, await uploadBlob(blob)] as const)
+    )
+  );
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: encodeWire(body, (argPath, kind) => {
-      // oxlint-disable-next-line no-console
-      console.warn(`${path}: dropping ${kind} at ${argPath}`, body);
-    }),
+    body: encodeWire(
+      body,
+      (argPath, kind) => {
+        // oxlint-disable-next-line no-console
+        console.warn(`${path}: dropping ${kind} at ${argPath}`, body);
+      },
+      blobIds
+    ),
   });
   if (!response.ok) {
     throw new Error(`${path} failed: HTTP ${response.status}`);

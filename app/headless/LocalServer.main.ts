@@ -23,6 +23,7 @@ import type { ReduxBridge } from './ReduxBridge.std.ts';
 import { DEBUG_PAGE_HTML, DEBUG_PAGE_JS } from './debugPage.std.ts';
 import { APP_PAGE_CSP, renderAppPage } from './appPage.std.ts';
 import { decodeWire, encodeWire } from '../../ts/headless/wire.std.ts';
+import { UploadStore } from './UploadStore.node.ts';
 
 const log = createLogger('LocalServer');
 
@@ -146,6 +147,7 @@ export class LocalServer {
   readonly #options: Options;
   readonly #token: string;
   readonly #port: number;
+  readonly #uploads: UploadStore;
   #server: Server | undefined;
 
   constructor(options: Options) {
@@ -154,6 +156,7 @@ export class LocalServer {
     this.#port =
       Number.parseInt(process.env.SIGNAL_HEADLESS_PORT ?? '', 10) ||
       DEFAULT_PORT;
+    this.#uploads = new UploadStore(options.userDataPath);
   }
 
   get origin(): string {
@@ -161,6 +164,7 @@ export class LocalServer {
   }
 
   async start(): Promise<void> {
+    await this.#uploads.init();
     const server = createServer((req, res) => {
       drop(
         (async () => {
@@ -336,9 +340,27 @@ export class LocalServer {
     pathname: string
   ): Promise<void> {
     const { backend } = this.#options;
+
+    if (pathname === '/api/upload') {
+      // Raw bytes; name and type travel with the call that uses the upload
+      try {
+        const id = await this.#uploads.receive(req);
+        this.#sendText(res, 'application/json', JSON.stringify({ id }));
+      } catch (error) {
+        log.warn('upload failed', Errors.toLogFormat(error));
+        if (!res.headersSent) {
+          res.writeHead(400);
+        }
+        res.end();
+      }
+      return;
+    }
+
     let request: Record<string, unknown>;
     try {
-      request = decodeWire(await readBody(req)) as Record<string, unknown>;
+      request = decodeWire(await readBody(req), undefined, blob =>
+        this.#uploads.resolve(blob)
+      ) as Record<string, unknown>;
     } catch {
       res.writeHead(400).end();
       return;
