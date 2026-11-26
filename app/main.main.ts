@@ -79,6 +79,8 @@ import * as attachmentChannel from './attachment_channel.main.ts';
 import * as bounce from '../ts/services/bounce.main.ts';
 import * as updater from '../ts/updater/index.main.ts';
 import { updateDefaultSession } from './updateDefaultSession.main.ts';
+import { isHeadlessMode } from './headless/mode.std.ts';
+import { HeadlessHost } from './headless/HeadlessHost.main.ts';
 import { sanitize as sanitizeWebp } from '@signalapp/libsignal-client/dist/WebpSanitizer.js';
 import { PreventDisplaySleepService } from './PreventDisplaySleepService.std.ts';
 import {
@@ -779,7 +781,14 @@ async function createWindow() {
   log.info('Initializing BrowserWindow config:', windowOptions);
 
   // Create the browser window.
-  mainWindow = new BrowserWindow(windowOptions);
+  let headlessHost: HeadlessHost | undefined;
+  if (isHeadlessMode()) {
+    log.info('Headless mode: running main window renderer in-process');
+    headlessHost = new HeadlessHost();
+    mainWindow = headlessHost.asBrowserWindow;
+  } else {
+    mainWindow = new BrowserWindow(windowOptions);
+  }
 
   mainWindow.webContents.on('preload-error', (_event, _preloadPath, error) => {
     log.error(Errors.toLogFormat(error));
@@ -1059,6 +1068,11 @@ async function createWindow() {
       log.info('main window is ready-to-show');
       drop(maybeShowMainWindow());
     });
+  }
+
+  if (headlessHost) {
+    await headlessHost.start(rootDir);
+    return;
   }
 
   await safeLoadURL(
@@ -2430,7 +2444,7 @@ app.on('ready', async () => {
   drop(
     // oxlint-disable-next-line promise/prefer-await-to-then, signal-desktop/no-then
     Promise.race([sqlInitPromise, timeout]).then(async maybeTimeout => {
-      if (maybeTimeout !== 'timeout') {
+      if (maybeTimeout !== 'timeout' || isHeadlessMode()) {
         return;
       }
 
@@ -2775,7 +2789,9 @@ app.on('window-all-closed', () => {
   // Only automatically quit if the main window has been created
   // This is necessary because `window-all-closed` can be triggered by the
   // "optimizing application" window closing
-  if (shouldAutoClose && mainWindowCreated) {
+  // Headless: there is no main BrowserWindow, so other windows closing must
+  // not quit the app.
+  if (shouldAutoClose && mainWindowCreated && !isHeadlessMode()) {
     app.quit();
   }
 });

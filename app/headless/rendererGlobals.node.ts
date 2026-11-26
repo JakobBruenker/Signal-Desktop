@@ -1,0 +1,381 @@
+// Copyright 2026 Signal Messenger, LLC
+// SPDX-License-Identifier: AGPL-3.0-only
+
+// Minimal browser environment for running the main window's renderer code in
+// the main process. This is deliberately not a DOM implementation: the
+// backend shouldn't render anything. Missing pieces should surface as errors
+// so they can be moved to the browser UI or shimmed explicitly.
+
+// oxlint-disable max-classes-per-file
+
+import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
+
+import { createLogger } from '../../ts/logging/log.std.ts';
+
+const log = createLogger('rendererGlobals');
+
+class MemoryStorage {
+  readonly #map = new Map<string, string>();
+
+  get length(): number {
+    return this.#map.size;
+  }
+
+  key(index: number): string | null {
+    return [...this.#map.keys()][index] ?? null;
+  }
+
+  getItem(key: string): string | null {
+    return this.#map.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.#map.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.#map.delete(key);
+  }
+
+  clear(): void {
+    this.#map.clear();
+  }
+}
+
+function createStyleDeclaration() {
+  const properties = new Map<string, string>();
+  return {
+    setProperty(name: string, value: string) {
+      properties.set(name, value);
+    },
+    removeProperty(name: string) {
+      const old = properties.get(name) ?? '';
+      properties.delete(name);
+      return old;
+    },
+    getPropertyValue(name: string) {
+      return properties.get(name) ?? '';
+    },
+  } as Record<string, unknown>;
+}
+
+class StubElement extends EventTarget {
+  readonly tagName: string;
+  readonly style = createStyleDeclaration();
+  readonly dataset: Record<string, string> = {};
+  readonly children: Array<StubElement> = [];
+  readonly classList = {
+    add: () => undefined,
+    remove: () => undefined,
+    toggle: () => false,
+    contains: () => false,
+  };
+
+  innerHTML = '';
+  textContent = '';
+
+  constructor(tagName: string) {
+    super();
+    this.tagName = tagName.toUpperCase();
+  }
+
+  appendChild<T>(child: T): T {
+    return child;
+  }
+
+  removeChild<T>(child: T): T {
+    return child;
+  }
+
+  remove(): void {
+    // no-op
+  }
+
+  setAttribute(): void {
+    // no-op
+  }
+
+  getAttribute(): null {
+    return null;
+  }
+
+  querySelector(): null {
+    return null;
+  }
+
+  querySelectorAll(): Array<never> {
+    return [];
+  }
+
+  closest(): null {
+    return null;
+  }
+
+  focus(): void {
+    // no-op
+  }
+
+  blur(): void {
+    // no-op
+  }
+
+  getBoundingClientRect(): DOMRect {
+    return {
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      toJSON: () => ({}),
+    };
+  }
+}
+
+function createDocument(
+  locationHref: string,
+  DocumentClass: new (tagName: string) => StubElement
+) {
+  const documentElement = new StubElement('html');
+  const head = new StubElement('head');
+  const body = new StubElement('body');
+
+  const doc = Object.assign(new DocumentClass('#document'), {
+    documentElement,
+    head,
+    body,
+    title: 'Signal',
+    hidden: true,
+    visibilityState: 'hidden',
+    readyState: 'complete',
+    activeElement: body,
+    location: new URL(locationHref),
+    hasFocus: () => false,
+    createElement: (tagName: string) => new StubElement(tagName),
+    createElementNS: (_ns: string, tagName: string) => new StubElement(tagName),
+    createTextNode: (text: string) => ({ textContent: text }),
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getSelection: () => null,
+    implementation: {
+      createHTMLDocument: () => createDocument(locationHref, DocumentClass),
+    },
+  });
+  return doc;
+}
+
+export function installRendererGlobals({ rootDir }: { rootDir: string }): void {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (g.window === globalThis) {
+    throw new Error('installRendererGlobals: already installed');
+  }
+
+  const locationHref = pathToFileURL(join(rootDir, 'background.html')).href;
+
+  g.window = globalThis;
+  g.self = globalThis;
+  g.top = globalThis;
+  g.parent = globalThis;
+
+  // window behaves as an EventTarget ('online', 'offline', 'storage', ...)
+  const windowEvents = new EventTarget();
+  g.addEventListener = windowEvents.addEventListener.bind(windowEvents);
+  g.removeEventListener = windowEvents.removeEventListener.bind(windowEvents);
+  g.dispatchEvent = windowEvents.dispatchEvent.bind(windowEvents);
+
+  // UI libraries bundled alongside the backend code (react-aria, quill, ...)
+  // inspect or patch DOM classes when imported. Give them inert classes.
+  // Nothing is rendered in the backend.
+  class StubNode extends StubElement {}
+  for (const name of [
+    'Node',
+    'Element',
+    'HTMLElement',
+    'HTMLDivElement',
+    'HTMLSpanElement',
+    'HTMLInputElement',
+    'HTMLTextAreaElement',
+    'HTMLButtonElement',
+    'HTMLAnchorElement',
+    'HTMLImageElement',
+    'HTMLVideoElement',
+    'HTMLAudioElement',
+    'HTMLMediaElement',
+    'HTMLCanvasElement',
+    'HTMLIFrameElement',
+    'HTMLFormElement',
+    'HTMLSelectElement',
+    'HTMLLabelElement',
+    'SVGElement',
+    'SVGSVGElement',
+    'Text',
+    'Comment',
+    'CharacterData',
+    'DocumentFragment',
+    'ShadowRoot',
+    'Document',
+    'HTMLDocument',
+    'Range',
+    'Selection',
+  ]) {
+    if (!(name in g)) {
+      g[name] = class extends StubNode {};
+    }
+  }
+  // Media: audio playback belongs in the browser tab, not the backend.
+  class StubMediaElement extends StubNode {
+    src = '';
+    currentTime = 0;
+    duration = NaN;
+    paused = true;
+    muted = false;
+    volume = 1;
+    playbackRate = 1;
+    async play(): Promise<void> {
+      // no-op
+    }
+
+    pause(): void {
+      // no-op
+    }
+
+    load(): void {
+      // no-op
+    }
+  }
+  g.HTMLMediaElement = StubMediaElement;
+  g.HTMLAudioElement = class extends StubMediaElement {};
+  g.HTMLVideoElement = class extends StubMediaElement {};
+  g.Audio = class extends StubMediaElement {
+    constructor() {
+      super('audio');
+    }
+  };
+  g.Image = class extends (g.HTMLImageElement as typeof StubNode) {
+    constructor() {
+      super('img');
+    }
+  };
+  g.AudioContext = class extends EventTarget {
+    state = 'suspended';
+    async resume(): Promise<void> {
+      // no-op
+    }
+
+    async close(): Promise<void> {
+      // no-op
+    }
+  };
+
+  for (const name of [
+    'UIEvent',
+    'MouseEvent',
+    'KeyboardEvent',
+    'FocusEvent',
+    'InputEvent',
+    'WheelEvent',
+    'TouchEvent',
+    'DragEvent',
+    'ClipboardEvent',
+    'CompositionEvent',
+    'StorageEvent',
+  ]) {
+    if (!(name in g)) {
+      g[name] = class extends Event {};
+    }
+  }
+  class InertObserver {
+    observe(): void {
+      // no-op
+    }
+
+    unobserve(): void {
+      // no-op
+    }
+
+    disconnect(): void {
+      // no-op
+    }
+
+    takeRecords(): Array<never> {
+      return [];
+    }
+  }
+  for (const name of [
+    'MutationObserver',
+    'ResizeObserver',
+    'IntersectionObserver',
+  ]) {
+    if (!(name in g)) {
+      g[name] = InertObserver;
+    }
+  }
+
+  g.location = new URL(locationHref);
+  g.document = createDocument(
+    locationHref,
+    g.HTMLDocument as new (tagName: string) => StubElement
+  );
+  g.localStorage = new MemoryStorage();
+  // Only used to detect a pre-SQLite legacy install; never answering makes
+  // doesDatabaseExist() time out and report "no legacy database".
+  g.indexedDB = {
+    open: () => ({}),
+    deleteDatabase: () => ({}),
+  };
+  g.sessionStorage = new MemoryStorage();
+
+  // Node provides a `navigator` (userAgent, language, hardwareConcurrency,
+  // platform). Add what browsers have and the app reads.
+  const nav = globalThis.navigator as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries({
+    onLine: true,
+    languages: [nav.language ?? 'en-US'],
+    mediaDevices: undefined,
+    clipboard: undefined,
+  })) {
+    if (!(key in nav)) {
+      Object.defineProperty(nav, key, { value, configurable: true });
+    }
+  }
+
+  g.requestAnimationFrame = (cb: (time: number) => void) =>
+    setTimeout(() => cb(performance.now()), 16);
+  g.cancelAnimationFrame = (id: NodeJS.Timeout) => clearTimeout(id);
+  g.requestIdleCallback = (
+    cb: (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void
+  ) => setTimeout(() => cb({ didTimeout: false, timeRemaining: () => 50 }), 1);
+  g.cancelIdleCallback = (id: NodeJS.Timeout) => clearTimeout(id);
+
+  g.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+  });
+  g.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  g.devicePixelRatio = 1;
+  g.innerWidth = 800;
+  g.innerHeight = 600;
+
+  // Notifications get forwarded to connected browser tabs later; for now
+  // just record them.
+  g.Notification = class HeadlessNotification extends EventTarget {
+    static permission = 'granted';
+    static requestPermission = async () => 'granted';
+    constructor(title: string) {
+      super();
+      log.info('Notification (not yet forwarded):', title.length, 'chars');
+    }
+
+    close(): void {
+      // no-op
+    }
+  };
+}

@@ -1625,9 +1625,14 @@ async function startApp(): Promise<void> {
 
     cancelInitializationMessage();
 
-    const appContainer = document.getElementById('app-container');
-    strictAssert(appContainer != null, 'No #app-container');
-    createRoot(appContainer).render(createAppRoot(window.reduxStore));
+    if (window.SignalHeadless) {
+      // Headless: browser tabs render the UI from this store.
+      window.SignalHeadless.onAppReady(window.reduxStore);
+    } else {
+      const appContainer = document.getElementById('app-container');
+      strictAssert(appContainer != null, 'No #app-container');
+      createRoot(appContainer).render(createAppRoot(window.reduxStore));
+    }
     const hideMenuBar = itemStorage.get('hide-menu-bar', false);
     window.IPC.setAutoHideMenuBar(hideMenuBar);
     window.IPC.setMenuBarVisibility(!hideMenuBar);

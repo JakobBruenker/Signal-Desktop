@@ -41,6 +41,10 @@ const external = [
 
 const isProd = process.argv.some(arg => arg === '--minify');
 
+// Bundles evaluated by preload.wrapper.ts / app/headless/HeadlessHost.main.ts
+// as `(function(require, __dirname, exports){ ... })`
+const WRAPPED_BUNDLES = new Set(['preload/main.js', 'headless/backend.js']);
+
 const sandboxPreload = {
   // Preload
   'preload/about': 'ts/windows/about/preload.sandbox.ts',
@@ -105,7 +109,7 @@ const defaults = {
     sourcemapBaseUrl: 'bundles:///',
     postBanner: ({ fileName }) => {
       // See preload.wrapper.ts
-      if (fileName === 'preload/main.js') {
+      if (WRAPPED_BUNDLES.has(fileName)) {
         return '(function(require, __dirname, exports){';
       }
 
@@ -115,7 +119,7 @@ const defaults = {
       const lines = new Array<string>();
 
       // See preload.wrapper.ts
-      if (fileName === 'preload/main.js') {
+      if (WRAPPED_BUNDLES.has(fileName)) {
         lines.push('})');
       }
 
@@ -184,6 +188,20 @@ export default defineConfig([
       // Workers
       'workers/sql': 'ts/sql/mainWorker.node.ts',
       'workers/heic': 'ts/workers/heicConverterWorker.node.ts',
+    },
+  },
+
+  // Headless backend: the main window's renderer code, run inside the main
+  // process (SIGNAL_HEADLESS=1). Must not share chunks with the main bundle,
+  // otherwise both would share module-level state in one process.
+  {
+    ...defaults,
+    input: {
+      'headless/backend': 'ts/windows/main/preload.preload.ts',
+    },
+    output: {
+      ...defaults.output,
+      codeSplitting: false,
     },
   },
 

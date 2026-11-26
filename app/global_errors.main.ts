@@ -10,6 +10,7 @@ import { drop } from '../ts/util/drop.std.ts';
 import { createLogger } from '../ts/logging/log.std.ts';
 import { reallyJsonStringify } from '../ts/util/reallyJsonStringify.std.ts';
 import type { LocaleType } from './locale.node.ts';
+import { isHeadlessMode } from './headless/mode.std.ts';
 
 const log = createLogger('global_errors');
 
@@ -77,6 +78,29 @@ export const addHandler = (): void => {
       new Error(`Reason: ${reason}, Exit Code: ${exitCode}`)
     );
   });
+
+  if (isHeadlessMode()) {
+    // The main window's renderer code runs in this process. In a renderer,
+    // these errors are logged and surfaced as window events; they must not
+    // take down the whole app here either.
+    process.on('uncaughtException', (reason: unknown) => {
+      const error = _getError(reason);
+      log.error('Unhandled Error (headless):', Errors.toLogFormat(error));
+      globalThis.dispatchEvent?.(
+        Object.assign(new Event('error'), { error, message: error.message })
+      );
+    });
+    process.on('unhandledRejection', (reason: unknown) => {
+      log.error(
+        'Unhandled Promise Rejection (headless):',
+        Errors.toLogFormat(_getError(reason))
+      );
+      globalThis.dispatchEvent?.(
+        Object.assign(new Event('unhandledrejection'), { reason })
+      );
+    });
+    return;
+  }
 
   process.on('uncaughtException', (reason: unknown) => {
     handleError('Unhandled Error', _getError(reason));

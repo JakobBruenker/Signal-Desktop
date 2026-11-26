@@ -18,6 +18,7 @@ import type { ReduxActions } from './state/types.std.ts';
 import type { ScreenShareStatus } from './types/Calling.std.ts';
 import type { MessageCache } from './services/MessageCache.preload.ts';
 import type { StateType } from './state/reducer.preload.ts';
+import type { SignalHeadlessHooks } from './headless/types.std.ts';
 import type { CIType } from './CI.preload.ts';
 import type { IPCEventsType } from './util/createIPCEvents.preload.ts';
 import type { SignalContextType } from './windows/context.sandbox.ts';
@@ -199,6 +200,7 @@ declare global {
     // State
     reduxActions: ReduxActions;
     reduxStore: Store<StateType>;
+    SignalHeadless?: SignalHeadlessHooks;
 
     // Feature Flags
     Flags: FeatureFlagType;
