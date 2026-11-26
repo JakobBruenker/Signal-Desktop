@@ -46,6 +46,29 @@ const external = [
 
 const isProd = process.argv.some(arg => arg === '--minify');
 
+// Swaps app modules (by file name) for other implementations in one build.
+// A replacement may import the module it replaces.
+function fileReplacements(map: Record<string, string>) {
+  return {
+    name: 'file-replacements',
+    resolveId(id: string, importer: string | undefined) {
+      const replacement = map[id.split('/').pop() ?? ''];
+      if (replacement != null && importer != null && importer !== replacement) {
+        return replacement;
+      }
+      return undefined;
+    },
+  };
+}
+
+// Headless backend: DOM-dependent modules with Node implementations
+const BACKEND_FILE_REPLACEMENTS: Record<string, string> = {
+  'VisualAttachment.dom.ts': join(
+    __dirname,
+    'ts/headless/backend/visualAttachment.preload.ts'
+  ),
+};
+
 // Browser UI build: Node built-ins and native/Node-only modules become stubs
 // that throw when used (see ts/headless/browser/nodeStub.std.ts).
 const BROWSER_STUB_PREFIX = '\0node-stub:';
@@ -359,6 +382,7 @@ export default defineConfig([
     input: {
       'headless/backend': 'ts/windows/main/preload.preload.ts',
     },
+    plugins: [fileReplacements(BACKEND_FILE_REPLACEMENTS), ...defaults.plugins],
     output: {
       ...defaults.output,
       codeSplitting: false,

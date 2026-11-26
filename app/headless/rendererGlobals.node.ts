@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 
 import { createLogger } from '../../ts/logging/log.std.ts';
+import { drop } from '../../ts/util/drop.std.ts';
 
 const log = createLogger('rendererGlobals');
 
@@ -135,6 +136,12 @@ class StubElement extends EventTarget {
   }
 }
 
+const ELEMENT_CLASSES: Record<string, string> = {
+  img: 'HTMLImageElement',
+  video: 'HTMLVideoElement',
+  audio: 'HTMLAudioElement',
+};
+
 function createDocument(
   locationHref: string,
   DocumentClass: new (tagName: string) => StubElement
@@ -154,7 +161,13 @@ function createDocument(
     activeElement: body,
     location: new URL(locationHref),
     hasFocus: () => false,
-    createElement: (tagName: string) => new StubElement(tagName),
+    createElement: (tagName: string) => {
+      // <img>/<video>/<audio> fail to load (see FailingSourceElement)
+      const ctor = (globalThis as unknown as Record<string, unknown>)[
+        ELEMENT_CLASSES[tagName.toLowerCase()] ?? ''
+      ] as (new (tag: string) => StubElement) | undefined;
+      return ctor ? new ctor(tagName) : new StubElement(tagName);
+    },
     createElementNS: (_ns: string, tagName: string) => new StubElement(tagName),
     createTextNode: (text: string) => ({ textContent: text }),
     getElementById: () => null,
@@ -226,9 +239,33 @@ export function installRendererGlobals({ rootDir }: { rootDir: string }): void {
       g[name] = class extends StubNode {};
     }
   }
+  // Nothing loads in the backend: setting `src` fails asynchronously, like
+  // a broken image would. Code waiting for 'load' must not hang. (Image
+  // processing has a real implementation: ts/headless/backend/.)
+  class FailingSourceElement extends StubNode {
+    #src = '';
+    onerror: ((event: Event) => void) | null = null;
+    onload: ((event: Event) => void) | null = null;
+    naturalWidth = 0;
+    naturalHeight = 0;
+
+    get src(): string {
+      return this.#src;
+    }
+
+    set src(value: string) {
+      this.#src = value;
+      setTimeout(() => {
+        const event = new Event('error');
+        this.dispatchEvent(event);
+        this.onerror?.(event);
+      }, 0);
+    }
+  }
+  g.HTMLImageElement = class extends FailingSourceElement {};
+
   // Media: audio playback belongs in the browser tab, not the backend.
-  class StubMediaElement extends StubNode {
-    src = '';
+  class StubMediaElement extends FailingSourceElement {
     currentTime = 0;
     duration = NaN;
     paused = true;
@@ -260,6 +297,54 @@ export function installRendererGlobals({ rootDir }: { rootDir: string }): void {
       super('img');
     }
   };
+  // Node has Blob but not FileReader (used via blob-util's blobToArrayBuffer)
+  g.FileReader = class FileReader extends EventTarget {
+    result: ArrayBuffer | string | null = null;
+    error: unknown = null;
+    readyState = 0;
+    onload: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    onloadend: ((event: Event) => void) | null = null;
+
+    #read(blob: Blob, convert: (blob: Blob) => Promise<ArrayBuffer | string>) {
+      this.readyState = 1;
+      drop(
+        (async () => {
+          let type: 'load' | 'error' = 'load';
+          try {
+            this.result = await convert(blob);
+          } catch (error) {
+            this.error = error;
+            type = 'error';
+          }
+          this.readyState = 2;
+          for (const name of [type, 'loadend'] as const) {
+            const event = new Event(name);
+            this.dispatchEvent(event);
+            this[`on${name}`]?.(event);
+          }
+        })()
+      );
+    }
+
+    readAsArrayBuffer(blob: Blob): void {
+      this.#read(blob, b => b.arrayBuffer());
+    }
+
+    readAsText(blob: Blob): void {
+      this.#read(blob, b => b.text());
+    }
+
+    readAsDataURL(blob: Blob): void {
+      this.#read(
+        blob,
+        async b =>
+          `data:${b.type || 'application/octet-stream'};base64,` +
+          Buffer.from(await b.arrayBuffer()).toString('base64')
+      );
+    }
+  };
+
   g.AudioContext = class extends EventTarget {
     state = 'suspended';
     async resume(): Promise<void> {

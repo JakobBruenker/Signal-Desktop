@@ -27,12 +27,12 @@ g.process ??= {
 // Full stacks for uncaught errors (the default console line lacks them)
 window.addEventListener('error', event => {
   // oxlint-disable-next-line no-console
-  console.error('uncaught:', event.error?.stack ?? event.message);
+  console.error('uncaught:', event.error ?? event.message);
 });
 window.addEventListener('unhandledrejection', event => {
   const { reason } = event;
   // oxlint-disable-next-line no-console
-  console.error('unhandled rejection:', reason?.stack ?? reason);
+  console.error('unhandled rejection:', reason);
 });
 
 // Browser console errors/warnings also go to the backend's log, so problems
@@ -44,7 +44,12 @@ let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
 function formatArg(arg: unknown): string {
   if (arg instanceof Error) {
-    return arg.stack ?? `${arg.name}: ${arg.message}`;
+    // Firefox stacks don't include the message
+    const header = `${arg.name}: ${arg.message}`;
+    return arg.stack?.includes(arg.message)
+      ? arg.stack
+      : `${header}
+${arg.stack ?? ''}`;
   }
   if (typeof arg === 'string') {
     return arg;

@@ -499,6 +499,13 @@ export class HeadlessHost {
     window.preloadCompileStartTime = Date.now();
     const hooks: SignalHeadlessHooks = {
       reduxMiddleware: this.#bridge.middleware,
+      fetchLocalResource: async url => {
+        const response = await electron.net.fetch(url);
+        if (!response.ok) {
+          throw new Error(`fetchLocalResource: HTTP ${response.status}`);
+        }
+        return response.arrayBuffer();
+      },
       onAppReady: (store, modules) => {
         log.info('app ready; streaming redux store to browser tabs');
         this.#backendModules = modules;
