@@ -1,6 +1,8 @@
 // Copyright 2017 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
+// First: may set the environment variables read below
+import './headless/launchSwitch.main.ts';
 import { join, basename } from 'node:path';
 import { app } from 'electron';
 
