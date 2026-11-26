@@ -39,7 +39,7 @@ import {
   getStickersPath,
   getTempPath,
 } from '../attachments.node.ts';
-import type { BrowserBackend } from './LocalServer.main.ts';
+import type { BrowserBackend, TabState } from './LocalServer.main.ts';
 
 const log = createLogger('HeadlessHost');
 
@@ -153,6 +153,7 @@ export class HeadlessHost {
   readonly #ipcRenderer: HeadlessIpcRenderer;
   readonly #rendererEvent: { sender: HeadlessIpcRenderer; senderId: number };
   readonly #syncCache = new Map<string, unknown>();
+  readonly #tabs = new Map<string, TabState>();
   readonly #bridge = new ReduxBridge({
     getAttributes: ids => {
       const controller = getRendererGlobals().ConversationController;
@@ -355,6 +356,29 @@ export class HeadlessHost {
         return fn.apply(module, args);
       },
 
+      log: entries => {
+        for (const { level, text } of entries) {
+          // Never error level: main forwards those to the renderer
+          log.warn(`[browser ${level}] ${text}`);
+        }
+      },
+
+      setTabState: (tabId, state) => {
+        if (state) {
+          this.#tabs.set(tabId, state);
+        } else {
+          this.#tabs.delete(tabId);
+        }
+        this.#applyTabStates();
+      },
+
+      onTabActivity: () => {
+        // The backend's activeWindowService listens for these on `document`
+        (
+          globalThis as unknown as { document?: EventTarget }
+        ).document?.dispatchEvent(new Event('keydown'));
+      },
+
       dispatch: action => {
         if (
           action == null ||
@@ -368,6 +392,17 @@ export class HeadlessHost {
         renderer.reduxStore.dispatch(action);
       },
     };
+  }
+
+  // Any focused/visible tab counts as the window being focused/visible
+  #applyTabStates(): void {
+    const tabs = [...this.#tabs.values()];
+    if (tabs.some(tab => tab.visible)) {
+      this.window.show();
+    } else {
+      this.window.hide();
+    }
+    this.window.setFocused(tabs.some(tab => tab.focused));
   }
 
   async #prefetchSyncChannels(): Promise<void> {

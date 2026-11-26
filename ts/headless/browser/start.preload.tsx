@@ -30,6 +30,7 @@ import { restoreRemoteConfigFromStorage } from '../../RemoteConfig.std.ts';
 import { decodeWire } from '../wire.std.ts';
 import { callBackend, createRemoteActionBinder } from './backendClient.std.ts';
 import { BrowserConversationController } from './conversationController.preload.ts';
+import { startWindowStateReporting, tabId } from './windowState.dom.ts';
 import { setRemoteActionBinder } from '../../hooks/useBoundActions.std.ts';
 import { setLoadableUrlRewriter } from '../../util/toLoadableUrl.std.ts';
 import { drop } from '../../util/drop.std.ts';
@@ -154,7 +155,7 @@ function render(currentStore: Store<StateType>): void {
 }
 
 function connect(): void {
-  const events = new EventSource('/api/events');
+  const events = new EventSource(`/api/events?tab=${tabId}`);
   let seq = -1;
 
   events.addEventListener('snapshot', event => {
@@ -184,6 +185,7 @@ function connect(): void {
     syncModuleState(newStore.getState());
     newStore.subscribe(() => syncModuleState(newStore.getState()));
     render(newStore);
+    startWindowStateReporting();
   });
 
   events.addEventListener('action', event => {

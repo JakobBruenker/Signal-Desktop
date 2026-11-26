@@ -73,6 +73,16 @@ export type BrowserBackend = Readonly<{
     name: string,
     args: ReadonlyArray<unknown>
   ) => Promise<unknown>;
+  log: (entries: ReadonlyArray<{ level: string; text: string }>) => void;
+  // User activity (clicks, keys) in a tab
+  onTabActivity: () => void;
+  // Focus/visibility/activity of a tab; undefined state = tab closed
+  setTabState: (tabId: string, state: TabState | undefined) => void;
+}>;
+
+export type TabState = Readonly<{
+  focused: boolean;
+  visible: boolean;
 }>;
 
 type Options = Readonly<{
@@ -269,7 +279,7 @@ export class LocalServer {
       return;
     }
     if (url.pathname === '/api/events') {
-      this.#handleEvents(req, res);
+      this.#handleEvents(req, res, url.searchParams.get('tab'));
       return;
     }
     if (url.pathname === '/proto') {
@@ -352,6 +362,31 @@ export class LocalServer {
       case '/api/dispatch':
         await run(() => backend.dispatch(request.action));
         return;
+      case '/api/log':
+        await run(() =>
+          backend.log(
+            (Array.isArray(request.entries) ? request.entries : []).map(
+              (entry: { level?: unknown; text?: unknown }) => ({
+                level: String(entry?.level),
+                text: String(entry?.text),
+              })
+            )
+          )
+        );
+        return;
+      case '/api/window': {
+        const tabId = String(request.tabId);
+        await run(() => {
+          backend.setTabState(tabId, {
+            focused: request.focused === true,
+            visible: request.visible === true,
+          });
+          if (request.active === true) {
+            backend.onTabActivity();
+          }
+        });
+        return;
+      }
       case '/api/module':
         await run(() =>
           backend.callModule(String(request.module), String(request.name), args)
@@ -362,7 +397,11 @@ export class LocalServer {
     }
   }
 
-  #handleEvents(req: IncomingMessage, res: ServerResponse): void {
+  #handleEvents(
+    req: IncomingMessage,
+    res: ServerResponse,
+    tabId: string | null
+  ): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',
@@ -389,6 +428,9 @@ export class LocalServer {
     req.on('close', () => {
       clearInterval(heartbeat);
       bridge.removeClient(client);
+      if (tabId) {
+        this.#options.backend.setTabState(tabId, undefined);
+      }
       log.info(`events: tab disconnected (${bridge.clientCount} connected)`);
     });
 
