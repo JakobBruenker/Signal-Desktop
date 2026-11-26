@@ -25,6 +25,8 @@ import { createHeadlessWindow } from './HeadlessWindow.main.ts';
 import type { HeadlessBrowserWindow } from './HeadlessWindow.main.ts';
 import { installRendererGlobals } from './rendererGlobals.node.ts';
 import type { SignalHeadlessHooks } from '../../ts/headless/types.std.ts';
+import { ReduxBridge } from './ReduxBridge.std.ts';
+import { LocalServer } from './LocalServer.main.ts';
 
 const log = createLogger('HeadlessHost');
 
@@ -110,7 +112,8 @@ export class HeadlessHost {
   readonly #ipcRenderer: HeadlessIpcRenderer;
   readonly #rendererEvent: { sender: HeadlessIpcRenderer; senderId: number };
   readonly #syncCache = new Map<string, unknown>();
-  #reduxStore: Parameters<SignalHeadlessHooks['onAppReady']>[0] | undefined;
+  readonly #bridge = new ReduxBridge();
+  #server: LocalServer | undefined;
 
   constructor() {
     this.#ipcRenderer = new HeadlessIpcRenderer(this);
@@ -122,13 +125,6 @@ export class HeadlessHost {
     this.window = headless;
     this.asBrowserWindow = asBrowserWindow;
     this.#webContents = asWebContents;
-  }
-
-  // Available once the renderer app has started (used by the browser bridge).
-  get reduxStore():
-    | Parameters<SignalHeadlessHooks['onAppReady']>[0]
-    | undefined {
-    return this.#reduxStore;
   }
 
   // main -> renderer
@@ -276,6 +272,13 @@ export class HeadlessHost {
 
   // Equivalent of loading background.html with preload.wrapper.ts
   async start(rootDir: string): Promise<void> {
+    this.#server = new LocalServer({
+      rootDir,
+      userDataPath: electron.app.getPath('userData'),
+      bridge: this.#bridge,
+    });
+    await this.#server.start();
+
     await this.#prefetchSyncChannels();
     installRendererGlobals({ rootDir });
 
@@ -291,12 +294,10 @@ export class HeadlessHost {
     const window = globalThis as unknown as Record<string, unknown>;
     window.preloadCompileStartTime = Date.now();
     const hooks: SignalHeadlessHooks = {
+      reduxMiddleware: this.#bridge.middleware,
       onAppReady: store => {
-        this.#reduxStore = store;
-        log.info(
-          'app ready; redux store available with slices:',
-          Object.keys(store.getState()).length
-        );
+        log.info('app ready; streaming redux store to browser tabs');
+        this.#bridge.setStore(store);
       },
     };
     window.SignalHeadless = hooks;

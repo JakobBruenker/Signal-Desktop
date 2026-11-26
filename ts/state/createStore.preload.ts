@@ -84,6 +84,8 @@ const middlewareList = [
   dispatchItemsMiddleware,
   actionRateLogger,
   ...(env === 'production' || !REDUX_LOGGER_ENABLED ? [] : [logger]),
+  // Headless: forwards reducer-bound actions to connected browser tabs
+  ...(window.SignalHeadless ? [window.SignalHeadless.reduxMiddleware] : []),
 ];
 
 const enhancer = applyMiddleware(...middlewareList);
