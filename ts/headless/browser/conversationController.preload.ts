@@ -13,12 +13,48 @@ import { remoteFunction } from './remoteModule.std.ts';
 
 type Attributes = Readonly<Record<string, unknown>>;
 
+const callModelOnBackend = remoteFunction<
+  (id: string, method: string, args: ReadonlyArray<unknown>) => unknown
+>('ConversationModel', 'call');
+
+function isAsyncFunction(fn: unknown): boolean {
+  return typeof fn === 'function' && fn.constructor.name === 'AsyncFunction';
+}
+
+// Models whose async methods (loading, saving, sending: everything with side
+// effects beyond this tab) run on the backend's model. Synchronous getters
+// run locally on the streamed attributes.
+function wrapModel(model: ConversationModel): ConversationModel {
+  const forwarded = new Map<PropertyKey, unknown>();
+  return new Proxy(model, {
+    get(target, prop) {
+      // `target` as receiver so #private fields work
+      const value = Reflect.get(target, prop, target);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      if (typeof prop === 'string' && isAsyncFunction(value)) {
+        let fn = forwarded.get(prop);
+        if (!fn) {
+          fn = async (...args: Array<unknown>) =>
+            callModelOnBackend(target.id, prop, args);
+          forwarded.set(prop, fn);
+        }
+        return fn;
+      }
+      return value.bind(target);
+    },
+  });
+}
+
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 export class BrowserConversationController {
   readonly #byId = new Map<string, ConversationModel>();
+  // What callers get: see wrapModel
+  readonly #wrapped = new Map<string, ConversationModel>();
   // e164 / serviceId / pni / groupId -> id
   #byIdentifier = new Map<string, string>();
   #signalConversationId: string | undefined;
@@ -30,6 +66,7 @@ export class BrowserConversationController {
     signalConversationId: string | undefined
   ): void {
     this.#byId.clear();
+    this.#wrapped.clear();
     this.#signalConversationId = signalConversationId;
     this.update(attributesById, []);
   }
@@ -40,6 +77,7 @@ export class BrowserConversationController {
   ): void {
     for (const id of removedIds) {
       this.#byId.delete(id);
+      this.#wrapped.delete(id);
     }
     for (const [id, attributes] of Object.entries(attributesById)) {
       const existing = this.#byId.get(id);
@@ -50,10 +88,11 @@ export class BrowserConversationController {
         );
         existing.set({ ...cleared, ...attributes }, { noTrigger: true });
       } else {
-        this.#byId.set(
-          id,
-          new ConversationModel(attributes as ConversationAttributesType)
+        const model = new ConversationModel(
+          attributes as ConversationAttributesType
         );
+        this.#byId.set(id, model);
+        this.#wrapped.set(id, wrapModel(model));
       }
     }
     this.#reindex();
@@ -82,11 +121,11 @@ export class BrowserConversationController {
       this.#byIdentifier.get(identifier) ??
       this.#byIdentifier.get(`+${identifier}`) ??
       identifier;
-    return this.#byId.get(id);
+    return this.#wrapped.get(id);
   }
 
   getAll(): Array<ConversationModel> {
-    return [...this.#byId.values()];
+    return [...this.#wrapped.values()];
   }
 
   getConversationId(address: string | null): string | null {

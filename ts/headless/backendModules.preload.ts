@@ -7,6 +7,7 @@
 
 import * as WebAPI from '../textsecure/WebAPI.preload.ts';
 import { itemStorage } from '../textsecure/Storage.preload.ts';
+import { ConversationModel } from '../models/conversations.preload.ts';
 
 export const headlessBackendModules = {
   WebAPI,
@@ -14,6 +15,27 @@ export const headlessBackendModules = {
   // Created during startup, so looked up when called
   get ConversationController(): typeof window.ConversationController {
     return window.ConversationController;
+  },
+  // Methods of a conversation's model (the browser's models forward their
+  // async methods here)
+  ConversationModel: {
+    async call(
+      conversationId: string,
+      method: string,
+      args: ReadonlyArray<unknown>
+    ): Promise<unknown> {
+      const model = window.ConversationController.get(conversationId);
+      if (!model) {
+        throw new Error(`ConversationModel.call: no ${conversationId}`);
+      }
+      const fn: unknown = Object.hasOwn(ConversationModel.prototype, method)
+        ? Reflect.get(model, method)
+        : undefined;
+      if (typeof fn !== 'function' || method === 'constructor') {
+        throw new Error(`ConversationModel.call: no method ${method}`);
+      }
+      return fn.apply(model, args);
+    },
   },
 };
 
