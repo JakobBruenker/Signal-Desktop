@@ -13,6 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 
 import { drop } from '../../ts/util/drop.std.ts';
+import { MiniDOMParser } from './MiniDOMParser.std.ts';
 
 class MemoryStorage {
   readonly #map = new Map<string, string>();
@@ -320,6 +321,9 @@ export function installRendererGlobals({
     }
   };
   // Node has Blob but not FileReader (used via blob-util's blobToArrayBuffer)
+  // Enough for link previews (see MiniDOMParser.std.ts)
+  g.DOMParser = MiniDOMParser;
+
   g.FileReader = class FileReader extends EventTarget {
     result: ArrayBuffer | string | null = null;
     error: unknown = null;
