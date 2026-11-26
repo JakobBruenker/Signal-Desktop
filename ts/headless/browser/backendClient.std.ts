@@ -60,7 +60,15 @@ export async function callBackend(
 type ActionLocation = Readonly<{ duck: string; name: string }>;
 
 export function createRemoteActionBinder(
-  registry: Readonly<Record<string, ActionCreatorsMapObject>>
+  registry: Readonly<Record<string, ActionCreatorsMapObject>>,
+  {
+    localDucks,
+    dispatch,
+  }: Readonly<{
+    // Ducks whose action creators run in the browser (their thunks too)
+    localDucks: ReadonlySet<string>;
+    dispatch: (action: unknown) => unknown;
+  }>
 ): <T extends ActionCreatorsMapObject>(actions: T) => T {
   // Smart components bind whole ducks or hand-picked subsets, so resolve by
   // function identity rather than by object.
@@ -90,6 +98,10 @@ export function createRemoteActionBinder(
               'it cannot run in the browser'
           );
         };
+        continue;
+      }
+      if (localDucks.has(location.duck)) {
+        bound[key] = (...args: Array<unknown>) => dispatch(fn(...args));
         continue;
       }
       bound[key] = async (...args: Array<unknown>) => {

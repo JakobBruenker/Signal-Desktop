@@ -65,11 +65,11 @@ function replicaReducer(
 }
 
 // Anything dispatched locally (useDispatch) is applied on the backend.
-const forwardLocalDispatch: Middleware = () => next => action => {
+// Thunks of LOCAL_DUCKS run here; the plain actions they dispatch go to the
+// backend like any other.
+const forwardLocalDispatch: Middleware = api => next => action => {
   if (typeof action === 'function') {
-    // oxlint-disable-next-line no-console
-    console.error('Local thunk dispatch is not supported in the browser UI');
-    return undefined;
+    return action(api.dispatch, api.getState, undefined);
   }
   const { type } = action as UnknownAction;
   if (type === REPLACE_STATE || type === REMOTE_ACTION) {
@@ -108,7 +108,11 @@ function reviveUrls(key: string, value: string): string {
     : value;
 }
 
-const bindActions = createRemoteActionBinder(actionCreators);
+const bindActions = createRemoteActionBinder(actionCreators, {
+  // The microphone is in the browser, so the recorder runs here
+  localDucks: new Set(['audioRecorder']),
+  dispatch: action => window.reduxStore.dispatch(action as UnknownAction),
+});
 setRemoteActionBinder(bindActions);
 window.reduxActions = Object.fromEntries(
   Object.entries(actionCreators).map(([duck, actions]) => [

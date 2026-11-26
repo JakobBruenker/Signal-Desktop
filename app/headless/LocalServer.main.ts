@@ -330,6 +330,16 @@ export class LocalServer {
       await this.#handleStatic(req, res, url.pathname.slice('/static/'.length));
       return;
     }
+    if (url.pathname.startsWith('/bundles/workers/')) {
+      // Audio worklets (the voice note encoder), relative to the page
+      await this.#handleStatic(
+        req,
+        res,
+        url.pathname.slice('/bundles/'.length),
+        'bundles'
+      );
+      return;
+    }
     if (url.pathname.startsWith('/browser/')) {
       await this.#handleStatic(req, res, url.pathname.slice(1), 'bundles');
       return;
@@ -588,7 +598,8 @@ export class LocalServer {
   ): Promise<void> {
     const rootDir = join(this.#options.rootDir, container);
     const topDir = decodeURIComponent(relativePath).split('/')[0];
-    const allowed = container === 'bundles' ? ['browser'] : STATIC_DIRS;
+    const allowed =
+      container === 'bundles' ? ['browser', 'workers'] : STATIC_DIRS;
     if (topDir == null || !allowed.includes(topDir)) {
       res.writeHead(404).end();
       return;

@@ -180,6 +180,11 @@ const BROWSER_FILE_REPLACEMENTS: Record<
     'ts/headless/browser/itemStorage.preload.ts'
   ),
   'SignalProtocolStore.preload.ts': STUB,
+  // The browser asks for microphone access itself
+  'requestMicrophonePermissions.dom.ts': join(
+    __dirname,
+    'ts/headless/browser/requestMicrophonePermissions.std.ts'
+  ),
   // Writes draft files; Files passed to it are uploaded first
   'processAttachment.preload.ts': { remote: 'processAttachment' },
   // The backend's calling service (devices, calls); not ducks/calling
