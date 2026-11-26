@@ -10,6 +10,43 @@ import { drop } from '../../util/drop.std.ts';
 
 const g = globalThis as unknown as Record<string, unknown>;
 
+// The buffer polyfill (v6) predates the 'base64url' encoding. Its base64
+// decoder already accepts the URL-safe alphabet and missing padding, so
+// decoding only needs the name mapped; encoding converts the output.
+{
+  type Fn = (...args: Array<unknown>) => unknown;
+  const BufferClass = Buffer as unknown as Record<string, Fn>;
+  const mapEncoding = (value: unknown) =>
+    value === 'base64url' ? 'base64' : value;
+  const wrapStatic = (name: string, encodingIndex: number) => {
+    const original = BufferClass[name];
+    if (!original) {
+      return;
+    }
+    BufferClass[name] = function patched(this: unknown, ...args) {
+      const mapped = [...args];
+      mapped[encodingIndex] = mapEncoding(mapped[encodingIndex]);
+      return original.apply(this, mapped);
+    };
+  };
+  wrapStatic('from', 1);
+  wrapStatic('byteLength', 1);
+  wrapStatic('isEncoding', 0);
+
+  const toString = Reflect.get(Buffer.prototype, 'toString') as Fn;
+  Reflect.set(
+    Buffer.prototype,
+    'toString',
+    function patchedToString(this: unknown, ...args: Array<unknown>) {
+      if (args[0] !== 'base64url') {
+        return toString.apply(this, args);
+      }
+      const base64 = toString.call(this, 'base64', args[1], args[2]) as string;
+      return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+  );
+}
+
 g.global ??= globalThis;
 g.Buffer ??= Buffer;
 g.process ??= {

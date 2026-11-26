@@ -30,6 +30,7 @@ import { restoreRemoteConfigFromStorage } from '../../RemoteConfig.std.ts';
 import { decodeWire } from '../wire.std.ts';
 import { callBackend, createRemoteActionBinder } from './backendClient.std.ts';
 import { BrowserConversationController } from './conversationController.preload.ts';
+import { createBrowserIPCEvents } from './ipcEvents.std.ts';
 import { startWindowStateReporting, tabId } from './windowState.dom.ts';
 import {
   handleBackendEvents,
@@ -115,6 +116,8 @@ window.reduxActions = Object.fromEntries(
     bindActions(actions),
   ])
 ) as typeof window.reduxActions;
+
+window.Events = createBrowserIPCEvents();
 
 // Replaces the (empty) one phase1-ipc created
 const conversationController = BrowserConversationController.create();

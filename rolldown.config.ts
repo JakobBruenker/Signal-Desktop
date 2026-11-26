@@ -4,7 +4,7 @@
 
 import { readdirSync, rmSync } from 'node:fs';
 import { builtinModules } from 'node:module';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { defineConfig } from 'rolldown';
 import type { RolldownOptions } from 'rolldown';
 import { transform } from 'oxc-transform';
@@ -148,9 +148,12 @@ const BROWSER_REPLACEMENTS: Record<string, string> = {
   'node:os': join(__dirname, 'ts/headless/browser/osShim.dom.ts'),
   os: join(__dirname, 'ts/headless/browser/osShim.dom.ts'),
   'node:util': join(__dirname, 'ts/headless/browser/utilShim.std.ts'),
+  'node:crypto': join(__dirname, 'ts/headless/browser/cryptoShim.node.ts'),
+  crypto: join(__dirname, 'ts/headless/browser/cryptoShim.node.ts'),
   util: join(__dirname, 'ts/headless/browser/utilShim.std.ts'),
 };
-// App modules with a browser-specific implementation, by file name.
+// App modules with a browser-specific implementation, by file name (or by
+// path suffix, like 'services/x.ts', where file names are ambiguous).
 // STUB: replace with a throwing stub (backend-only modules with side effects
 // at load time, like opening connections).
 // { remote, local? }: every export calls the backend module registered as
@@ -179,11 +182,33 @@ const BROWSER_FILE_REPLACEMENTS: Record<
   'SignalProtocolStore.preload.ts': STUB,
   // Writes draft files; Files passed to it are uploaded first
   'processAttachment.preload.ts': { remote: 'processAttachment' },
+  // The backend's calling service (devices, calls); not ducks/calling
+  'services/calling.preload.ts': join(
+    __dirname,
+    'ts/headless/browser/callingService.std.ts'
+  ),
   'set_up_renderer_logging.preload.ts': join(
     __dirname,
     'ts/headless/browser/rendererLogging.std.ts'
   ),
 };
+function findFileReplacementKey(
+  id: string,
+  importer: string | undefined
+): string | undefined {
+  const fileName = id.split('/').pop() ?? '';
+  if (Object.hasOwn(BROWSER_FILE_REPLACEMENTS, fileName)) {
+    return fileName;
+  }
+  if (importer == null || !id.startsWith('.')) {
+    return undefined;
+  }
+  const resolved = resolve(dirname(importer), id).replaceAll('\\', '/');
+  return Object.keys(BROWSER_FILE_REPLACEMENTS).find(
+    key => key.includes('/') && resolved.endsWith(`/${key}`)
+  );
+}
+
 const browserNodeStubs = {
   name: 'browser-node-stubs',
   resolveId(id: string, importer: string | undefined) {
@@ -191,8 +216,9 @@ const browserNodeStubs = {
     if (replacement != null) {
       return replacement;
     }
-    const fileName = id.split('/').pop() ?? '';
-    const fileReplacement = BROWSER_FILE_REPLACEMENTS[fileName];
+    const fileName = findFileReplacementKey(id, importer);
+    const fileReplacement =
+      fileName == null ? undefined : BROWSER_FILE_REPLACEMENTS[fileName];
     if (fileReplacement === STUB) {
       return `${BROWSER_STUB_PREFIX}${fileName}`;
     }

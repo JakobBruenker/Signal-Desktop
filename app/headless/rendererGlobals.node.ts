@@ -442,7 +442,15 @@ export function installRendererGlobals({
   for (const [key, value] of Object.entries({
     onLine: true,
     languages: [nav.language ?? 'en-US'],
-    mediaDevices: undefined,
+    // No cameras/microphones here; calls would use the browser tab's
+    mediaDevices: {
+      enumerateDevices: async () => [],
+      getUserMedia: async () => {
+        throw new Error('getUserMedia: no media devices in headless backend');
+      },
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    },
     clipboard: undefined,
   })) {
     if (!(key in nav)) {
