@@ -11,7 +11,7 @@ export const APP_PAGE_CSP = [
   "img-src 'self' blob: data:",
   "media-src 'self' blob:",
   "font-src 'self'",
-  "connect-src 'self'",
+  "connect-src 'self' blob:",
   "worker-src 'self' blob:",
   "frame-src 'none'",
   "base-uri 'none'",

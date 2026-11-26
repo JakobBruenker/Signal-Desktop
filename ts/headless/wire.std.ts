@@ -15,7 +15,30 @@ type Tagged =
   | { [TAG]: 'date'; v: number }
   | { [TAG]: 'bigint'; v: string }
   | { [TAG]: 'undefined' }
-  | ({ [TAG]: 'blob' } & WireBlob);
+  | ({ [TAG]: 'blob' } & WireBlob)
+  | {
+      [TAG]: 'response';
+      status: number;
+      statusText: string;
+      headers: Array<[string, string]>;
+    };
+
+type ResponseLike = Readonly<{
+  status: number;
+  statusText: string;
+  headers: { forEach: (fn: (value: string, key: string) => void) => void };
+  arrayBuffer: () => unknown;
+}>;
+
+// fetch() Responses, including node-fetch's (which aren't a global Response)
+function isResponseLike(value: object): value is ResponseLike {
+  const candidate = value as Partial<ResponseLike>;
+  return (
+    typeof candidate.status === 'number' &&
+    typeof candidate.arrayBuffer === 'function' &&
+    typeof candidate.headers?.forEach === 'function'
+  );
+}
 
 // A Blob/File uploaded to the backend ahead of the message that refers to it
 export type WireBlob = Readonly<{
@@ -79,6 +102,22 @@ function encodeValue(
   }
   if (value instanceof Date) {
     return { [TAG]: 'date', v: value.getTime() };
+  }
+  if (isResponseLike(value)) {
+    // Status and headers only; callers get the body separately (e.g.
+    // BytesWithDetailsType.data)
+    const headers: Array<[string, string]> = [];
+    value.headers.forEach((v, k) => headers.push([k, v]));
+    return {
+      [TAG]: 'response',
+      status: value.status,
+      statusText: value.statusText,
+      headers,
+    };
+  }
+  if (typeof AbortSignal !== 'undefined' && value instanceof AbortSignal) {
+    // Cancelling isn't forwarded; the call just runs to completion
+    return { [TAG]: 'undefined' };
   }
   if (typeof Blob !== 'undefined' && value instanceof Blob) {
     const id = context.blobIds?.get(value);
@@ -179,6 +218,16 @@ function decodeValue(
         return BigInt(value.v);
       case 'undefined':
         return undefined;
+      case 'response': {
+        // new Response() only accepts statuses 200-599
+        const status =
+          value.status >= 200 && value.status <= 599 ? value.status : 200;
+        return new Response(null, {
+          status,
+          statusText: value.statusText,
+          headers: value.headers,
+        });
+      }
       case 'blob':
         if (!context.resolveBlob) {
           throw new Error('wire: unexpected blob');

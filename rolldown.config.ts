@@ -153,11 +153,11 @@ const BROWSER_REPLACEMENTS: Record<string, string> = {
 // App modules with a browser-specific implementation, by file name.
 // STUB: replace with a throwing stub (backend-only modules with side effects
 // at load time, like opening connections).
-// { remote, local }: every export calls the backend module registered as
+// { remote, local? }: every export calls the backend module registered as
 // `remote` (ts/headless/backendModules.preload.ts), except those `local`
 // implements.
 const STUB = Symbol('STUB');
-type RemoteModule = Readonly<{ remote: string; local: string }>;
+type RemoteModule = Readonly<{ remote: string; local?: string }>;
 const BROWSER_REMOTE_PREFIX = '\0remote-module:';
 const BROWSER_FILE_REPLACEMENTS: Record<
   string,
@@ -177,6 +177,8 @@ const BROWSER_FILE_REPLACEMENTS: Record<
     'ts/headless/browser/itemStorage.preload.ts'
   ),
   'SignalProtocolStore.preload.ts': STUB,
+  // Writes draft files; Files passed to it are uploaded first
+  'processAttachment.preload.ts': { remote: 'processAttachment' },
   'set_up_renderer_logging.preload.ts': join(
     __dirname,
     'ts/headless/browser/rendererLogging.std.ts'

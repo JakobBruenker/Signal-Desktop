@@ -113,6 +113,18 @@ export class ReduxBridge {
     }
   }
 
+  // Like broadcast(), but to a single tab; false if none is connected
+  sendToOne(event: string, payload: unknown): boolean {
+    const data = encodeWire(payload, this.#report);
+    for (const client of this.#clients) {
+      if (client.send(event, data)) {
+        return true;
+      }
+      this.#clients.delete(client);
+    }
+    return false;
+  }
+
   setStore(store: Store): void {
     this.#store = store;
     for (const client of this.#pending) {

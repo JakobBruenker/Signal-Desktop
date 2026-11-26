@@ -8,10 +8,12 @@
 import * as WebAPI from '../textsecure/WebAPI.preload.ts';
 import { itemStorage } from '../textsecure/Storage.preload.ts';
 import { ConversationModel } from '../models/conversations.preload.ts';
+import * as processAttachment from '../util/processAttachment.preload.ts';
 
 export const headlessBackendModules = {
   WebAPI,
   itemStorage,
+  processAttachment,
   // Created during startup, so looked up when called
   get ConversationController(): typeof window.ConversationController {
     return window.ConversationController;

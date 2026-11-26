@@ -14,16 +14,21 @@ import type {
   GetImageDimensionsOptionsType,
   MakeImageThumbnailForBackupOptionsType,
   MakeImageThumbnailOptionsType,
+  MakeVideoScreenshotOptionsType,
+  MakeVideoScreenshotResultType,
 } from '../../types/VisualAttachment.dom.ts';
 import { MAX_BACKUP_THUMBNAIL_SIZE } from '../../types/VisualAttachment.dom.ts';
-import { drawToFit, encodeCanvas, loadImageFrom } from './images.preload.ts';
+import {
+  drawToFit,
+  encodeCanvas,
+  loadImageFrom,
+  readSource,
+} from './images.preload.ts';
 
 export {
   TRANSCODABLE_VIDEO_FORMATS,
   blobToArrayBuffer,
   MAX_BACKUP_THUMBNAIL_SIZE,
-  makeVideoScreenshot,
-  estimateTranscodedVideoSize,
 } from '../../types/VisualAttachment.dom.ts';
 export type {
   CreatedThumbnailType,
@@ -109,4 +114,51 @@ export async function makeImageThumbnailForBackup({
     height,
     mimeType: IMAGE_JPEG,
   };
+}
+
+// Video decoding needs WebCodecs, so these run in a connected browser tab
+// (see ts/headless/browser/tabJobs.dom.ts)
+
+async function runInTab(
+  kind: string,
+  args: unknown,
+  url: string
+): Promise<unknown> {
+  const headless = window.SignalHeadless;
+  if (!headless) {
+    throw new Error(`${kind}: not running headless`);
+  }
+  // blob: URLs only exist in this process; attachment:// etc. are streamed
+  const input = url.startsWith('blob:') ? await readSource(url) : url;
+  return headless.runInTab(kind, args, input);
+}
+
+export async function makeVideoScreenshot({
+  objectUrl,
+  contentType = IMAGE_PNG,
+}: MakeVideoScreenshotOptionsType): Promise<MakeVideoScreenshotResultType> {
+  const { screenshot, ...rest } = (await runInTab(
+    'makeVideoScreenshot',
+    { contentType },
+    objectUrl
+  )) as Omit<MakeVideoScreenshotResultType, 'blob'> & {
+    screenshot: Uint8Array<ArrayBuffer>;
+  };
+  return { ...rest, blob: new Blob([screenshot], { type: contentType }) };
+}
+
+export async function estimateTranscodedVideoSize({
+  url,
+  ...options
+}: {
+  url: string;
+  duration: number;
+  targetResolution: number;
+  targetBitrate: number;
+}): Promise<number> {
+  return (await runInTab(
+    'estimateTranscodedVideoSize',
+    options,
+    url
+  )) as number;
 }

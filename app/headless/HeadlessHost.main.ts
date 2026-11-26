@@ -30,6 +30,7 @@ import type { HeadlessNotificationType } from './rendererGlobals.node.ts';
 import type { SignalHeadlessHooks } from '../../ts/headless/types.std.ts';
 import { ReduxBridge } from './ReduxBridge.std.ts';
 import { LocalServer } from './LocalServer.main.ts';
+import { TabJobs } from './TabJobs.node.ts';
 import {
   getAttachmentsPath,
   getAvatarsPath,
@@ -179,6 +180,7 @@ export class HeadlessHost {
         .find(model => controller.isSignalConversationId(model.id))?.id;
     },
   });
+  readonly #tabJobs = new TabJobs(this.#bridge);
   #backendModules: Record<string, object> | undefined;
   #server: LocalServer | undefined;
 
@@ -384,6 +386,9 @@ export class HeadlessHost {
         notification.trigger(action);
       },
 
+      getJobInput: id => this.#tabJobs.getInput(id),
+      completeJob: (id, result) => this.#tabJobs.complete(id, result),
+
       getInitialEvents: () => [
         { event: 'badge', payload: { count: this.#badgeCount } },
       ],
@@ -541,6 +546,8 @@ export class HeadlessHost {
     const hooks: SignalHeadlessHooks = {
       reduxMiddleware: this.#bridge.middleware,
       playSound: sound => this.#bridge.broadcast('sound', sound),
+      runInTab: (kind, args, input, options) =>
+        this.#tabJobs.run(kind, args, input, options),
       stopSound: id => this.#bridge.broadcast('sound-stop', { id }),
       fetchLocalResource: async url => {
         const response = await electron.net.fetch(url);

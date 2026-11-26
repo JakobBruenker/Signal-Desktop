@@ -57,6 +57,7 @@ import {
 } from './getLocalAttachmentUrl.std.ts';
 import { createName } from './attachmentPath.node.ts';
 import { CiphertextReconciler } from './CiphertextReconciler.node.ts';
+import { transcodeVideoInTab } from '../headless/backend/transcodeVideo.preload.ts';
 
 type TranscodingFieldsType = LocalAttachmentV2Type &
   Partial<Pick<AttachmentType, 'contentType'>>;
@@ -144,6 +145,11 @@ async function transcodeVideo(
   const url = getLocalAttachmentUrl(attachment, {
     disposition: AttachmentDisposition.Attachment,
   });
+
+  // Headless backend: no WebCodecs here, a browser tab transcodes
+  if (window.SignalHeadless) {
+    return transcodeVideoInTab(url, options);
+  }
 
   const source = createUrlSource(url);
 

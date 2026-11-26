@@ -47,12 +47,14 @@ export function getRemoteModuleSource({
   remoteHelperPath,
 }: {
   remote: string;
-  localPath: string;
+  localPath: string | undefined;
   remoteHelperPath: string;
 }): string {
+  const local =
+    localPath == null ? '{}' : `require(${JSON.stringify(localPath)})`;
   return `
 'use strict';
-const local = require(${JSON.stringify(localPath)});
+const local = ${local};
 const { remoteFunction } = require(${JSON.stringify(remoteHelperPath)});
 const cache = new Map();
 module.exports = new Proxy({}, {

@@ -20,6 +20,15 @@ export type SignalHeadlessHooks = Readonly<{
   stopSound: (id: string) => void;
   // Loads attachment:/asset:/emoji: URLs through main's protocol handlers
   fetchLocalResource: (url: string) => Promise<ArrayBuffer>;
+  // Runs work that needs a real browser (e.g. video decoding) in a connected
+  // tab; see app/headless/TabJobs.node.ts and ts/headless/browser/tabJobs.dom.ts
+  // `input` is a Blob or an attachment:// (etc.) URL.
+  runInTab: (
+    kind: string,
+    args: unknown,
+    input: Blob | string,
+    options?: Readonly<{ timeoutMs?: number }>
+  ) => Promise<unknown>;
   onAppReady: (
     store: Store<StateType>,
     modules: HeadlessBackendModules

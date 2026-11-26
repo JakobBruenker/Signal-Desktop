@@ -24,6 +24,7 @@ import { DEBUG_PAGE_HTML, DEBUG_PAGE_JS } from './debugPage.std.ts';
 import { APP_PAGE_CSP, renderAppPage } from './appPage.std.ts';
 import { decodeWire, encodeWire } from '../../ts/headless/wire.std.ts';
 import { UploadStore } from './UploadStore.node.ts';
+import type { TabJobInput, TabJobResult } from './TabJobs.node.ts';
 
 const log = createLogger('LocalServer');
 
@@ -79,6 +80,9 @@ export type BrowserBackend = Readonly<{
   onTabActivity: () => void;
   // A tab's notification was clicked or closed
   notificationAction: (id: string, action: 'click' | 'close') => void;
+  // Tab jobs (see TabJobs.node.ts)
+  getJobInput: (id: string) => TabJobInput | undefined;
+  completeJob: (id: string, result: TabJobResult) => void;
   // Events a newly connected tab needs (current badge count, ...)
   getInitialEvents: () => ReadonlyArray<{ event: string; payload: unknown }>;
   // Focus/visibility/activity of a tab; undefined state = tab closed
@@ -290,12 +294,35 @@ export class LocalServer {
       this.#handleEvents(req, res, url.searchParams.get('tab'));
       return;
     }
+    if (url.pathname === '/api/job/input') {
+      const input = this.#options.backend.getJobInput(
+        url.searchParams.get('id') ?? ''
+      );
+      if (input == null) {
+        res.writeHead(404).end();
+        return;
+      }
+      if (typeof input === 'string') {
+        await this.#handleProtocol(req, res, input);
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(input.size),
+        'Cache-Control': 'no-store',
+      });
+      Readable.fromWeb(input.stream() as NodeReadableStream).pipe(res);
+      return;
+    }
     if (url.pathname === '/proto') {
       await this.#handleProtocol(req, res, url.searchParams.get('url') ?? '');
       return;
     }
-    if (url.pathname.startsWith('/sounds/')) {
-      // Sound.getSrc() paths are relative to the page
+    if (
+      url.pathname.startsWith('/sounds/') ||
+      url.pathname.startsWith('/images/')
+    ) {
+      // Paths relative to the page (Sound.getSrc(), <img src="images/...">)
       await this.#handleStatic(req, res, url.pathname.slice(1));
       return;
     }
@@ -418,6 +445,15 @@ export class LocalServer {
         });
         return;
       }
+      case '/api/job/result':
+        backend.completeJob(
+          String(request.id),
+          request.ok === true
+            ? { ok: true, value: request.value }
+            : { ok: false, error: String(request.error) }
+        );
+        reply({ ok: true, value: undefined });
+        return;
       case '/api/notification':
         await run(() =>
           backend.notificationAction(
@@ -518,6 +554,18 @@ export class LocalServer {
       if (value != null) {
         outHeaders[name] = value;
       }
+    }
+    // The attachment: handler answers open-ended ranges with
+    // "bytes <start>-/<total>", which browsers' media players reject
+    const openRange = /^bytes (\d+)-\/(\d+)$/.exec(
+      outHeaders['content-range'] ?? ''
+    );
+    if (openRange) {
+      const start = Number(openRange[1]);
+      const total = Number(openRange[2]);
+      const length = Number(outHeaders['content-length'] ?? total - start);
+      outHeaders['content-range'] =
+        `bytes ${start}-${start + length - 1}/${total}`;
     }
     // Some handlers (asset:) don't set one; fonts/images need it with nosniff
     outHeaders['content-type'] ??=

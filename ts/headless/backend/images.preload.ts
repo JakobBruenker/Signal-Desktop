@@ -16,26 +16,26 @@ import type { MIMEType } from '../../types/MIME.std.ts';
 // protocol handlers, which decrypt) or a blob: URL created in this process.
 export type ImageSource = Blob | string;
 
-async function readSource(source: ImageSource): Promise<ArrayBuffer> {
+export async function readSource(source: ImageSource): Promise<Blob> {
   if (typeof source !== 'string') {
-    return source.arrayBuffer();
+    return source;
   }
   if (source.startsWith('blob:')) {
     const blob = resolveObjectURL(source);
     if (!blob) {
       throw new Error('readSource: unknown blob URL');
     }
-    return blob.arrayBuffer();
+    return blob as Blob;
   }
   const headless = window.SignalHeadless;
   if (!headless) {
     throw new Error('readSource: not running headless');
   }
-  return headless.fetchLocalResource(source);
+  return new Blob([await headless.fetchLocalResource(source)]);
 }
 
 export async function loadImageFrom(source: ImageSource): Promise<Image> {
-  return loadImage(Buffer.from(await readSource(source)));
+  return loadImage(Buffer.from(await (await readSource(source)).arrayBuffer()));
 }
 
 // Scaled down (never up) to fit within the given box

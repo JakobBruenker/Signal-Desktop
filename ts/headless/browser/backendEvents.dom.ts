@@ -1,12 +1,13 @@
 // Copyright 2026 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Backend events that aren't redux state: notifications, sounds and the
-// unread badge count (shown in the tab title and favicon).
+// Backend events that aren't redux state: notifications, sounds, the
+// unread badge count (shown in the tab title and favicon) and tab jobs.
 
 import { drop } from '../../util/drop.std.ts';
 import { decodeWire } from '../wire.std.ts';
 import { callBackend } from './backendClient.std.ts';
+import { handleTabJobs } from './tabJobs.dom.ts';
 
 const FAVICON_SRC = '/static/images/signal-logo-desktop-linux.png';
 const FAVICON_SIZE = 64;
@@ -188,6 +189,7 @@ export function handleBackendEvents(
   events.addEventListener('badge', event => {
     setBadge((decodeWire(event.data) as { count: number }).count);
   });
+  handleTabJobs(events);
 }
 
 export function initializeBackendEvents(): void {
