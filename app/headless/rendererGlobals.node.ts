@@ -8,13 +8,11 @@
 
 // oxlint-disable max-classes-per-file
 
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 
-import { createLogger } from '../../ts/logging/log.std.ts';
 import { drop } from '../../ts/util/drop.std.ts';
-
-const log = createLogger('rendererGlobals');
 
 class MemoryStorage {
   readonly #map = new Map<string, string>();
@@ -181,7 +179,31 @@ function createDocument(
   return doc;
 }
 
-export function installRendererGlobals({ rootDir }: { rootDir: string }): void {
+// window.Notification in the backend; shown by browser tabs
+export type HeadlessNotificationType = Readonly<{
+  id: string;
+  toJSON: () => Readonly<{
+    id: string;
+    title: string;
+    body?: string;
+    icon?: string;
+    tag?: string;
+  }>;
+  trigger: (action: 'click' | 'close') => void;
+}>;
+
+type NotificationSink = Readonly<{
+  show: (notification: HeadlessNotificationType) => void;
+  close: (notification: HeadlessNotificationType) => void;
+}>;
+
+export function installRendererGlobals({
+  rootDir,
+  notifications,
+}: {
+  rootDir: string;
+  notifications: NotificationSink;
+}): void {
   const g = globalThis as unknown as Record<string, unknown>;
   if (g.window === globalThis) {
     throw new Error('installRendererGlobals: already installed');
@@ -449,18 +471,50 @@ export function installRendererGlobals({ rootDir }: { rootDir: string }): void {
   g.innerWidth = 800;
   g.innerHeight = 600;
 
-  // Notifications get forwarded to connected browser tabs later; for now
-  // just record them.
-  g.Notification = class HeadlessNotification extends EventTarget {
+  // Shown by the connected browser tabs; clicks come back via trigger()
+  g.Notification = class HeadlessNotification
+    extends EventTarget
+    implements HeadlessNotificationType
+  {
     static permission = 'granted';
     static requestPermission = async () => 'granted';
-    constructor(title: string) {
+
+    readonly id = randomUUID();
+    readonly title: string;
+    readonly options: NotificationOptions;
+    onclick: ((event: Event) => void) | null = null;
+    onclose: ((event: Event) => void) | null = null;
+    #closed = false;
+
+    constructor(title: string, options: NotificationOptions = {}) {
       super();
-      log.info('Notification (not yet forwarded):', title.length, 'chars');
+      this.title = title;
+      this.options = options;
+      notifications.show(this);
+    }
+
+    toJSON() {
+      return {
+        id: this.id,
+        title: this.title,
+        body: this.options.body,
+        icon: this.options.icon,
+        tag: this.options.tag,
+      };
+    }
+
+    trigger(action: 'click' | 'close'): void {
+      const event = new Event(action);
+      this.dispatchEvent(event);
+      (action === 'click' ? this.onclick : this.onclose)?.(event);
     }
 
     close(): void {
-      // no-op
+      if (this.#closed) {
+        return;
+      }
+      this.#closed = true;
+      notifications.close(this);
     }
   };
 }

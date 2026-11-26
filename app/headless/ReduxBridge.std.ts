@@ -19,7 +19,7 @@ const log = createLogger('ReduxBridge');
 export type BridgeClient = Readonly<{
   // Returns false if the client is gone or can't keep up; it is then dropped
   // and will reconnect (and get a fresh snapshot).
-  send: (event: 'snapshot' | 'action', data: string) => boolean;
+  send: (event: string, data: string) => boolean;
 }>;
 
 export type ConversationModelSource = Readonly<{
@@ -102,6 +102,16 @@ export class ReduxBridge {
       }
       return result;
     };
+
+  // Events outside the redux stream (notifications, sounds, badge count)
+  broadcast(event: string, payload: unknown): void {
+    const data = encodeWire(payload, this.#report);
+    for (const client of this.#clients) {
+      if (!client.send(event, data)) {
+        this.#clients.delete(client);
+      }
+    }
+  }
 
   setStore(store: Store): void {
     this.#store = store;

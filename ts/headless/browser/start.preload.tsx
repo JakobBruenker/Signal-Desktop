@@ -31,6 +31,10 @@ import { decodeWire } from '../wire.std.ts';
 import { callBackend, createRemoteActionBinder } from './backendClient.std.ts';
 import { BrowserConversationController } from './conversationController.preload.ts';
 import { startWindowStateReporting, tabId } from './windowState.dom.ts';
+import {
+  handleBackendEvents,
+  initializeBackendEvents,
+} from './backendEvents.dom.ts';
 import { setRemoteActionBinder } from '../../hooks/useBoundActions.std.ts';
 import { setLoadableUrlRewriter } from '../../util/toLoadableUrl.std.ts';
 import { drop } from '../../util/drop.std.ts';
@@ -156,6 +160,7 @@ function render(currentStore: Store<StateType>): void {
 
 function connect(): void {
   const events = new EventSource(`/api/events?tab=${tabId}`);
+  handleBackendEvents(events, toServerUrl);
   let seq = -1;
 
   events.addEventListener('snapshot', event => {
@@ -215,4 +220,5 @@ function connect(): void {
   });
 }
 
+initializeBackendEvents();
 connect();

@@ -27,6 +27,7 @@ export function renderAppPage(bootJson: string): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Signal</title>
+    <link rel="icon" href="/static/images/signal-logo-desktop-linux.png" />
     <link href="/static/stylesheets/quill.css" rel="stylesheet" />
     <link href="/static/stylesheets/manifest.css" rel="stylesheet" />
     <link href="/static/stylesheets/tailwind.css" rel="stylesheet" />

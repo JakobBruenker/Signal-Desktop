@@ -13,6 +13,11 @@ export type SignalHeadlessHooks = Readonly<{
   // Installed last in the redux middleware chain, so it only sees the plain
   // actions that reach the reducers (after thunks and promises resolve).
   reduxMiddleware: Middleware;
+  // Sounds play in browser tabs (see ts/headless/backend/sound.dom.ts)
+  playSound: (
+    sound: Readonly<{ id: string; src: string; loop: boolean }>
+  ) => void;
+  stopSound: (id: string) => void;
   // Loads attachment:/asset:/emoji: URLs through main's protocol handlers
   fetchLocalResource: (url: string) => Promise<ArrayBuffer>;
   onAppReady: (

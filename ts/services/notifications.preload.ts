@@ -256,7 +256,9 @@ export class NotificationService extends EventEmitter {
 
     this.#closeLastShown();
 
-    if (OS.isWindows()) {
+    // Headless: window.Notification is forwarded to the browser tabs, which
+    // native Windows toasts couldn't focus.
+    if (OS.isWindows() && !window.SignalHeadless) {
       const token = this._createToken({
         conversationId,
         messageId,

@@ -76,6 +76,10 @@ export type BrowserBackend = Readonly<{
   log: (entries: ReadonlyArray<{ level: string; text: string }>) => void;
   // User activity (clicks, keys) in a tab
   onTabActivity: () => void;
+  // A tab's notification was clicked or closed
+  notificationAction: (id: string, action: 'click' | 'close') => void;
+  // Events a newly connected tab needs (current badge count, ...)
+  getInitialEvents: () => ReadonlyArray<{ event: string; payload: unknown }>;
   // Focus/visibility/activity of a tab; undefined state = tab closed
   setTabState: (tabId: string, state: TabState | undefined) => void;
 }>;
@@ -286,6 +290,11 @@ export class LocalServer {
       await this.#handleProtocol(req, res, url.searchParams.get('url') ?? '');
       return;
     }
+    if (url.pathname.startsWith('/sounds/')) {
+      // Sound.getSrc() paths are relative to the page
+      await this.#handleStatic(req, res, url.pathname.slice(1));
+      return;
+    }
     if (url.pathname.startsWith('/static/')) {
       await this.#handleStatic(req, res, url.pathname.slice('/static/'.length));
       return;
@@ -387,6 +396,14 @@ export class LocalServer {
         });
         return;
       }
+      case '/api/notification':
+        await run(() =>
+          backend.notificationAction(
+            String(request.id),
+            request.action === 'click' ? 'click' : 'close'
+          )
+        );
+        return;
       case '/api/module':
         await run(() =>
           backend.callModule(String(request.module), String(request.name), args)
@@ -411,7 +428,7 @@ export class LocalServer {
 
     const { bridge } = this.#options;
     const client = {
-      send: (event: 'snapshot' | 'action', data: string): boolean => {
+      send: (event: string, data: string): boolean => {
         if (res.destroyed || res.writableLength > SSE_MAX_BUFFERED_BYTES) {
           res.destroy();
           return false;
@@ -434,6 +451,9 @@ export class LocalServer {
       log.info(`events: tab disconnected (${bridge.clientCount} connected)`);
     });
 
+    for (const { event, payload } of this.#options.backend.getInitialEvents()) {
+      client.send(event, encodeWire(payload));
+    }
     bridge.addClient(client);
     log.info(`events: tab connected (${bridge.clientCount} connected)`);
   }

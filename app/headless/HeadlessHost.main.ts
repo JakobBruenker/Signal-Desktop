@@ -26,6 +26,7 @@ import { drop } from '../../ts/util/drop.std.ts';
 import { createHeadlessWindow } from './HeadlessWindow.main.ts';
 import type { HeadlessBrowserWindow } from './HeadlessWindow.main.ts';
 import { installRendererGlobals } from './rendererGlobals.node.ts';
+import type { HeadlessNotificationType } from './rendererGlobals.node.ts';
 import type { SignalHeadlessHooks } from '../../ts/headless/types.std.ts';
 import { ReduxBridge } from './ReduxBridge.std.ts';
 import { LocalServer } from './LocalServer.main.ts';
@@ -154,6 +155,8 @@ export class HeadlessHost {
   readonly #rendererEvent: { sender: HeadlessIpcRenderer; senderId: number };
   readonly #syncCache = new Map<string, unknown>();
   readonly #tabs = new Map<string, TabState>();
+  readonly #notifications = new Map<string, HeadlessNotificationType>();
+  #badgeCount = 0;
   readonly #bridge = new ReduxBridge({
     getAttributes: ids => {
       const controller = getRendererGlobals().ConversationController;
@@ -372,6 +375,19 @@ export class HeadlessHost {
         this.#applyTabStates();
       },
 
+      notificationAction: (id, action) => {
+        const notification = this.#notifications.get(id);
+        if (!notification) {
+          return;
+        }
+        this.#notifications.delete(id);
+        notification.trigger(action);
+      },
+
+      getInitialEvents: () => [
+        { event: 'badge', payload: { count: this.#badgeCount } },
+      ],
+
       onTabActivity: () => {
         // The backend's activeWindowService listens for these on `document`
         (
@@ -484,7 +500,32 @@ export class HeadlessHost {
     await this.#server.start();
 
     await this.#prefetchSyncChannels();
-    installRendererGlobals({ rootDir });
+    installRendererGlobals({
+      rootDir,
+      notifications: {
+        show: notification => {
+          this.#notifications.set(notification.id, notification);
+          // Signal keeps a single notification slot; bound the map anyway
+          if (this.#notifications.size > 50) {
+            const oldest = this.#notifications.keys().next().value;
+            if (oldest) {
+              this.#notifications.delete(oldest);
+            }
+          }
+          this.#bridge.broadcast('notification', notification.toJSON());
+        },
+        close: notification => {
+          this.#notifications.delete(notification.id);
+          this.#bridge.broadcast('notification-close', { id: notification.id });
+        },
+      },
+    });
+
+    // Taskbar badge -> tab title/favicon. main's own handler still runs.
+    electron.ipcMain.on('set-badge-count', (_event, count: unknown) => {
+      this.#badgeCount = typeof count === 'number' ? count : 0;
+      this.#bridge.broadcast('badge', { count: this.#badgeCount });
+    });
 
     const bundleDir = join(rootDir, 'bundles', 'headless');
     const bundlePath = join(bundleDir, 'backend.js');
@@ -499,6 +540,8 @@ export class HeadlessHost {
     window.preloadCompileStartTime = Date.now();
     const hooks: SignalHeadlessHooks = {
       reduxMiddleware: this.#bridge.middleware,
+      playSound: sound => this.#bridge.broadcast('sound', sound),
+      stopSound: id => this.#bridge.broadcast('sound-stop', { id }),
       fetchLocalResource: async url => {
         const response = await electron.net.fetch(url);
         if (!response.ok) {
