@@ -18,7 +18,7 @@ export const APP_PAGE_CSP = [
   "form-action 'none'",
 ].join('; ');
 
-export function renderAppPage(bootJson: string): string {
+export function renderAppPage(bootJson: string, build: string): string {
   // Embedded in a non-executed <script>; only `<` could end it early.
   const safeJson = bootJson.replace(/</g, '\\u003c');
   return `<!doctype html>
@@ -26,6 +26,7 @@ export function renderAppPage(bootJson: string): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="signal-build" content="${escapeAttribute(build)}" />
     <title>Signal</title>
     <link rel="icon" href="/static/images/signal-logo-desktop-linux.png" />
     <link href="/static/stylesheets/quill.css" rel="stylesheet" />
@@ -49,4 +50,11 @@ export function renderAppPage(bootJson: string): string {
   </body>
 </html>
 `;
+}
+
+function escapeAttribute(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;');
 }

@@ -7,7 +7,12 @@
 // checked to defeat DNS rebinding; POSTs must come from our own origin.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, createReadStream } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  createReadStream,
+  statSync,
+} from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
@@ -147,11 +152,25 @@ function getCookie(req: IncomingMessage, name: string): string | undefined {
   return undefined;
 }
 
+function getBuildId(rootDir: string): string {
+  try {
+    const { mtimeMs, size } = statSync(
+      join(rootDir, 'bundles', 'browser', 'app.js')
+    );
+    return `${Math.round(mtimeMs)}-${size}`;
+  } catch {
+    return 'unknown';
+  }
+}
+
 export class LocalServer {
   readonly #options: Options;
   readonly #token: string;
   readonly #port: number;
   readonly #uploads: UploadStore;
+  // Identifies the browser bundle this server hands out. Tabs still running
+  // an older one (opened before a restart with new code) reload themselves.
+  readonly #build: string;
   #server: Server | undefined;
 
   constructor(options: Options) {
@@ -161,6 +180,7 @@ export class LocalServer {
       Number.parseInt(process.env.SIGNAL_HEADLESS_PORT ?? '', 10) ||
       DEFAULT_PORT;
     this.#uploads = new UploadStore(options.userDataPath);
+    this.#build = getBuildId(options.rootDir);
   }
 
   get origin(): string {
@@ -274,7 +294,10 @@ export class LocalServer {
       this.#sendText(
         res,
         'text/html; charset=utf-8',
-        renderAppPage(encodeWire(this.#options.backend.getBootData())),
+        renderAppPage(
+          encodeWire(this.#options.backend.getBootData()),
+          this.#build
+        ),
         { 'Content-Security-Policy': APP_PAGE_CSP }
       );
       return;
@@ -519,6 +542,7 @@ export class LocalServer {
       log.info(`events: tab disconnected (${bridge.clientCount} connected)`);
     });
 
+    client.send('build', encodeWire(this.#build));
     for (const { event, payload } of this.#options.backend.getInitialEvents()) {
       client.send(event, encodeWire(payload));
     }

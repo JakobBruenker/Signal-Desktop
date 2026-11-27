@@ -171,10 +171,24 @@ function render(currentStore: Store<StateType>): void {
   root.render(createApp(currentStore));
 }
 
+const LOADED_BUILD = document
+  .querySelector('meta[name="signal-build"]')
+  ?.getAttribute('content');
+
 function connect(): void {
   const events = new EventSource(`/api/events?tab=${tabId}`);
   handleBackendEvents(events, toServerUrl);
   let seq = -1;
+
+  // After a backend restart with new code, this tab's code is out of date
+  // (calls and wire format may have changed): load the new version.
+  events.addEventListener('build', event => {
+    const build = decodeWire(event.data);
+    if (build !== LOADED_BUILD) {
+      events.close();
+      window.location.reload();
+    }
+  });
 
   events.addEventListener('snapshot', event => {
     const snapshot = decodeWire(event.data, reviveUrls) as {
