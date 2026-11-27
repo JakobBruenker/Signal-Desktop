@@ -31,6 +31,10 @@ import { decodeWire } from '../wire.std.ts';
 import { callBackend, createRemoteActionBinder } from './backendClient.std.ts';
 import { BrowserConversationController } from './conversationController.preload.ts';
 import { createBrowserIPCEvents } from './ipcEvents.std.ts';
+import {
+  installRecordingCleanup,
+  trackLocalAction,
+} from './recordingCleanup.dom.ts';
 import { startWindowStateReporting, tabId } from './windowState.dom.ts';
 import {
   handleBackendEvents,
@@ -72,6 +76,7 @@ const forwardLocalDispatch: Middleware = api => next => action => {
     return action(api.dispatch, api.getState, undefined);
   }
   const { type } = action as UnknownAction;
+  trackLocalAction(type);
   if (type === REPLACE_STATE || type === REMOTE_ACTION) {
     return next(action);
   }
@@ -122,6 +127,7 @@ window.reduxActions = Object.fromEntries(
 ) as typeof window.reduxActions;
 
 window.Events = createBrowserIPCEvents();
+installRecordingCleanup();
 
 // Replaces the (empty) one phase1-ipc created
 const conversationController = BrowserConversationController.create();
